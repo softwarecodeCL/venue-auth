@@ -1,0 +1,889 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["public", "webapi"]
+}
+
+/// *
+///  * ===================== User & Auth =====================
+model User {
+  id                String                @id @default(uuid())
+  email             String                @unique
+  name              String?
+  passwordHash      String?
+  avatarUrl         String?
+  emailVerified     Boolean               @default(false)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  lastLogin         DateTime?
+  locale            String?
+  aboutMe           String?
+  phone             String?
+  defaultCurrency   Currency?
+  deletedAt         DateTime?
+  marketingOptIn    Boolean               @default(false)
+  phoneVerified     Boolean               @default(false)
+  privacyAcceptedAt DateTime?
+  status            UserStatus            @default(ACTIVE)
+  termsAcceptedAt   DateTime?
+  timezone          String?
+  twoFactorEnabled  Boolean               @default(false)
+  authProviders     AuthProvider[]
+  contactInfo       ContactInformation?
+  notifications     NotificationSetting[]
+  providerProfile   ProviderProfile?
+  socialAccounts    SocialAccounts?
+  roles             UserRole[]
+  bookings          Booking[]             @relation("UserBookings")
+  favorites         Favorite[]
+  listings          Listing[]
+  reviews           Review[]              @relation("UserReviews")
+  reviewHelpful     ReviewHelpful[]
+  reviewReplies     ReviewReply[]         @relation("UserReviewReplies")
+
+  @@schema("public")
+}
+
+model UserRole {
+  userId String
+  role   Role
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@id([userId, role])
+  @@schema("public")
+}
+
+model NotificationSetting {
+  id             String  @id @default(uuid())
+  userId         String
+  emailOnBooking Boolean @default(true)
+  emailOnMessage Boolean @default(true)
+  pushOnBooking  Boolean @default(true)
+  pushOnMessage  Boolean @default(true)
+  user           User    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@schema("public")
+}
+
+model ContactInformation {
+  id        String  @id @default(uuid())
+  address1  String?
+  city      String?
+  state     String?
+  country   String?
+  zipCode   String?
+  latitude  Float?
+  longitude Float?
+  userId    String  @unique
+  user      User    @relation(fields: [userId], references: [id])
+
+  @@schema("public")
+}
+
+model SocialAccounts {
+  id         String  @id @default(uuid())
+  facebook   String?
+  twitter    String?
+  linkedIn   String?
+  dribbble   String?
+  pinterest  String?
+  vimeoUrl   String?
+  youtubeUrl String?
+  websiteUrl String?
+  userId     String  @unique
+  user       User    @relation(fields: [userId], references: [id])
+
+  @@schema("public")
+}
+
+model AuthProvider {
+  id             String    @id @default(uuid())
+  provider       String
+  providerUserId String
+  userId         String
+  accessToken    String?
+  refreshToken   String?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  user           User      @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerUserId])
+  @@index([userId, provider])
+  @@schema("public")
+}
+
+model ProviderProfile {
+  id                    String    @id @default(uuid())
+  userId                String    @unique
+  legalType             String?
+  legalName             String?
+  taxId                 String?
+  kycStatus             KycStatus @default(NONE)
+  stripeCustomerId      String?
+  stripeAccountId       String?
+  onboardingCompletedAt DateTime?
+  ratingAvg             Float     @default(0)
+  ratingCount           Int       @default(0)
+  user                  User      @relation(fields: [userId], references: [id])
+
+  @@index([kycStatus])
+  @@schema("public")
+}
+
+/// *
+///  * ===================== Listing Core =====================
+model Listing {
+  id                                String               @id @default(uuid())
+  ownerId                           String
+  category                          ListingCategory
+  status                            ListingStatus        @default(DRAFT)
+  title                             String
+  subtitle                          String?
+  description                       String
+  highlights                        String[]
+  language                          String?
+  currency                          Currency             @default(CLP)
+  coverImage                        String?
+  slug                              String?              @unique
+  createdAt                         DateTime             @default(now())
+  updatedAt                         DateTime             @updatedAt
+  timeZone                          String?
+  accuracyLevel                     AccuracyLevel?
+  admin1                            String?
+  ageMin                            Int?
+  brandName                         String?
+  cancellation                      CancellationPolicy?
+  city                              String?
+  countryCode                       String?              @db.Char(2)
+  displayAddress                    String?
+  floorAreaSqm                      Int?
+  geohash                           String?
+  geohash5                          String?
+  instantBook                       InstantBookMode      @default(NONE)
+  isArchived                        Boolean              @default(false)
+  lat                               Float?
+  lng                               Float?
+  locationId                        String?
+  locationSource                    String?
+  locationUpdatedAt                 DateTime?
+  longBookingDiscountPercent        Decimal?             @db.Decimal(5, 2)
+  longBookingDiscountThresholdHours Int?
+  maxGuests                         Int?
+  minBookingHours                   Int?
+  moderation                        ModerationState      @default(PENDING)
+  publishedAt                       DateTime?
+  rules                             String[]
+  showApproximate                   Boolean              @default(false)
+  eventTypeId                       String?
+  bookings                          Booking[]
+  experience                        ExperienceDetails?
+  favorites                         Favorite[]
+  eventType                         EventType?           @relation(fields: [eventTypeId], references: [id])
+  location                          Location?            @relation(fields: [locationId], references: [id])
+  owner                             User                 @relation(fields: [ownerId], references: [id])
+  accessInfo                        ListingAccessInfo?
+  addons                            ListingAddon[]
+  address                           ListingAddress?
+  amenities                         ListingAmenity[]
+  healthSafety                      ListingHealthSafety?
+  tags                              ListingTag[]
+  lodging                           LodgingDetails?
+  media                             MediaAsset[]
+  reviews                           Review[]
+  service                           ServiceDetails?
+
+  @@index([eventTypeId])
+  @@index([category, status, createdAt])
+  @@index([ownerId, status])
+  @@index([status, publishedAt])
+  @@index([status, geohash5, createdAt])
+  @@schema("webapi")
+}
+
+model EventType {
+  id       String    @id(map: "event_types_pkey") @default(cuid())
+  slug     String    @unique(map: "event_types_slug_key")
+  titleEn  String
+  titleEs  String
+  listings Listing[]
+
+  @@map("eventTypes")
+  @@schema("webapi")
+}
+
+model ListingAccessInfo {
+  id                  String  @id @default(uuid())
+  listingId           String  @unique
+  arrivalInstructions String?
+  parkingDetails      String?
+  wifiSsid            String?
+  wifiPassword        String?
+  isSensitive         Boolean @default(true)
+  listing             Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@schema("webapi")
+}
+
+model ListingHealthSafety {
+  id                   String  @id @default(uuid())
+  listingId            String  @unique
+  cleanedPerGuidelines Boolean @default(false)
+  highTouchDisinfected Boolean @default(false)
+  hepaFilters          Boolean @default(false)
+  outdoorSpace         Boolean @default(false)
+  distancingConfigured Boolean @default(false)
+  masksProvided        Boolean @default(false)
+  glovesProvided       Boolean @default(false)
+  sanitizerProvided    Boolean @default(false)
+  signageDeployed      Boolean @default(false)
+  notes                String?
+  listing              Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@schema("webapi")
+}
+
+model ServiceAllowedActivity {
+  id          String         @id @default(uuid())
+  serviceId   String
+  type        ActivityType
+  enabled     Boolean        @default(false)
+  hourlyRate  Decimal        @db.Decimal(10, 2)
+  minHours    Int?
+  instantBook Boolean        @default(false)
+  capacity    Int?
+  cleaningFee Decimal?       @db.Decimal(10, 2)
+  service     ServiceDetails @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, type])
+  @@schema("webapi")
+}
+
+model ListingAddon {
+  id        String  @id @default(uuid())
+  listingId String
+  name      String
+  price     Decimal @db.Decimal(10, 2)
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, name])
+  @@schema("webapi")
+}
+
+model ListingAmenity {
+  listingId String
+  amenityId String
+  amenity   AmenityCatalog @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+  listing   Listing        @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@id([listingId, amenityId])
+  @@schema("webapi")
+}
+
+model ListingAddress {
+  id        String  @id @default(uuid())
+  listingId String  @unique
+  country   String
+  region    String?
+  city      String?
+  zip       String?
+  line1     String?
+  line2     String?
+  latitude  Float?
+  longitude Float?
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([country, city])
+  @@index([latitude, longitude])
+  @@schema("webapi")
+}
+
+model MediaAsset {
+  id        String    @id @default(uuid())
+  listingId String
+  kind      MediaKind
+  url       String
+  position  Int       @default(0)
+  caption   String?
+  createdAt DateTime  @default(now())
+  listing   Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, kind])
+  @@schema("webapi")
+}
+
+model Tag {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  listingTags ListingTag[]
+
+  @@schema("webapi")
+}
+
+model ListingTag {
+  listingId String
+  tagId     String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([listingId, tagId])
+  @@schema("webapi")
+}
+
+/// *
+///  * ===================== Lodging =====================
+model LodgingDetails {
+  id              String                @id @default(uuid())
+  listingId       String                @unique
+  propertyType    String
+  roomKind        RoomKind
+  guests          Int
+  bedrooms        Int
+  beds            Int
+  baths           Int
+  checkIn         String?
+  checkOut        String?
+  petsAllowed     Boolean?              @default(false)
+  smokingAllowed  Boolean?              @default(false)
+  eventsAllowed   Boolean?              @default(false)
+  quietHoursStart String?
+  quietHoursEnd   String?
+  amenities       LodgingAmenity[]
+  availability    LodgingAvailability[]
+  listing         Listing               @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  pricing         LodgingPricing?
+  safety          LodgingSafety[]
+
+  @@index([propertyType, roomKind])
+  @@index([guests])
+  @@schema("webapi")
+}
+
+model AmenityCatalog {
+  id               String           @id @default(uuid())
+  code             String           @unique
+  label            String
+  kind             String
+  listingAmenities ListingAmenity[]
+  lodgingAmenities LodgingAmenity[]
+  lodgingSafety    LodgingSafety[]
+
+  @@schema("webapi")
+}
+
+model LodgingAmenity {
+  lodgingId String
+  amenityId String
+  amenity   AmenityCatalog @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+  lodging   LodgingDetails @relation(fields: [lodgingId], references: [id], onDelete: Cascade)
+
+  @@id([lodgingId, amenityId])
+  @@schema("webapi")
+}
+
+model LodgingSafety {
+  lodgingId String
+  amenityId String
+  amenity   AmenityCatalog @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+  lodging   LodgingDetails @relation(fields: [lodgingId], references: [id], onDelete: Cascade)
+
+  @@id([lodgingId, amenityId])
+  @@schema("webapi")
+}
+
+model LodgingPricing {
+  id             String         @id @default(uuid())
+  lodgingId      String         @unique
+  pricePerNight  Decimal        @db.Decimal(10, 2)
+  cleaningFee    Decimal?       @db.Decimal(10, 2)
+  extraGuestFrom Int?
+  extraGuestFee  Decimal?       @db.Decimal(10, 2)
+  taxesPercent   Decimal?       @db.Decimal(5, 2)
+  minNights      Int            @default(1)
+  maxNights      Int?
+  deposit        Decimal?       @db.Decimal(10, 2)
+  lodging        LodgingDetails @relation(fields: [lodgingId], references: [id], onDelete: Cascade)
+
+  @@schema("webapi")
+}
+
+model LodgingAvailability {
+  id        String         @id @default(uuid())
+  lodgingId String
+  startDate DateTime
+  endDate   DateTime
+  reason    String?
+  lodging   LodgingDetails @relation(fields: [lodgingId], references: [id], onDelete: Cascade)
+
+  @@index([lodgingId, startDate, endDate])
+  @@schema("webapi")
+}
+
+/// *
+///  * ===================== Experiences =====================
+model ExperienceDetails {
+  id                 String             @id @default(uuid())
+  listingId          String             @unique
+  subtype            String
+  difficulty         Difficulty
+  fitnessLevel       FitnessLevel?
+  minAge             Int?
+  maxAge             Int?
+  weightMinKg        Int?
+  weightMaxKg        Int?
+  heightMinCm        Int?
+  heightMaxCm        Int?
+  requiredSkills     String[]
+  languages          String[]
+  meetingLat         Float
+  meetingLon         Float
+  meetingAddr        String
+  meetingNotes       String?
+  finishLat          Float?
+  finishLon          Float?
+  finishAddr         String?
+  durationMin        Int
+  weekdays           Int[]
+  startTimes         String[]
+  seasonFrom         DateTime?
+  seasonTo           DateTime?
+  leadTimeHours      Int?
+  cutoffHours        Int?
+  bufferMin          Int?
+  minGuests          Int
+  maxGuests          Int
+  privateOption      Boolean            @default(false)
+  guideToGuestRatio  String?
+  includes           String[]
+  excludes           String[]
+  foodOptions        String[]
+  waterProvided      Boolean            @default(false)
+  waiverRequired     Boolean            @default(false)
+  waiverDocUrl       String?
+  insuranceProvided  Boolean            @default(false)
+  permits            String[]
+  certifications     String[]
+  emergencyPlan      String?
+  weatherPolicy      String?
+  cancellationPolicy String?
+  subtypeExtra       Json?
+  addons             ExperienceAddon[]
+  listing            Listing            @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  pricing            ExperiencePricing?
+
+  @@index([meetingLat, meetingLon])
+  @@schema("webapi")
+}
+
+model ExperiencePricing {
+  id                String            @id @default(uuid())
+  experienceId      String            @unique
+  priceAdult        Decimal           @db.Decimal(10, 2)
+  priceChild        Decimal?          @db.Decimal(10, 2)
+  privateGroupPrice Decimal?          @db.Decimal(10, 2)
+  taxesPercent      Decimal?          @db.Decimal(5, 2)
+  experience        ExperienceDetails @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@schema("webapi")
+}
+
+model ExperienceAddon {
+  id           String            @id @default(uuid())
+  experienceId String
+  name         String
+  price        Decimal           @db.Decimal(10, 2)
+  experience   ExperienceDetails @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@index([experienceId, name])
+  @@schema("webapi")
+}
+
+/// *
+///  * ===================== Services =====================
+model ServiceDetails {
+  id                String                   @id @default(uuid())
+  listingId         String                   @unique
+  serviceType       String
+  modality          ServiceModality
+  baseLat           Float
+  baseLon           Float
+  baseAddress       String
+  areaType          String
+  radiusKm          Float?
+  polygonGeo        Json?
+  travelFee         Decimal?                 @db.Decimal(10, 2)
+  leadTimeHr        Int?
+  bufferMin         Int?
+  minHours          Int?
+  openingHours      String?
+  cameraNotes       String?
+  capacityMax       Int?
+  hasCameras        Boolean?                 @default(false)
+  offersOvernight   Boolean?                 @default(false)
+  spaceType         String?
+  exceptions        ServiceAgendaException[]
+  schedule          ServiceAgendaSlot[]
+  allowedActivities ServiceAllowedActivity[]
+  listing           Listing                  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  licenses          ServiceLicense[]
+  portfolio         ServicePortfolio[]
+  pricing           ServicePricing?
+
+  @@index([serviceType, modality])
+  @@index([baseLat, baseLon])
+  @@schema("webapi")
+}
+
+model ServiceAgendaSlot {
+  id        String         @id @default(uuid())
+  serviceId String
+  dayOfWeek Int
+  openTime  String
+  closeTime String
+  service   ServiceDetails @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, dayOfWeek])
+  @@schema("webapi")
+}
+
+model ServiceAgendaException {
+  id        String         @id @default(uuid())
+  serviceId String
+  date      DateTime
+  closed    Boolean        @default(false)
+  openTime  String?
+  closeTime String?
+  service   ServiceDetails @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@schema("webapi")
+}
+
+model ServicePricing {
+  id               String         @id @default(uuid())
+  serviceId        String         @unique
+  model            PriceModel
+  hourlyRate       Decimal?       @db.Decimal(10, 2)
+  fixedPrice       Decimal?       @db.Decimal(10, 2)
+  calloutFee       Decimal?       @db.Decimal(10, 2)
+  materials        Decimal?       @db.Decimal(10, 2)
+  taxesPercent     Decimal?       @db.Decimal(5, 2)
+  cleaningFee      Decimal?       @db.Decimal(10, 2)
+  pricePerAttendee Decimal?       @db.Decimal(10, 2)
+  service          ServiceDetails @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@schema("webapi")
+}
+
+model ServiceLicense {
+  id         String         @id @default(uuid())
+  serviceId  String
+  kind       String
+  number     String?
+  issuer     String?
+  validUntil DateTime?
+  fileUrl    String?
+  service    ServiceDetails @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, kind])
+  @@schema("webapi")
+}
+
+model ServicePortfolio {
+  id        String         @id @default(uuid())
+  serviceId String
+  title     String?
+  mediaUrl  String
+  notes     String?
+  position  Int            @default(0)
+  service   ServiceDetails @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, position])
+  @@schema("webapi")
+}
+
+/// *
+///  * ===================== Booking / Reviews / Favorites =====================
+model Booking {
+  id        String        @id @default(uuid())
+  listingId String
+  guestId   String
+  startAt   DateTime
+  endAt     DateTime
+  guests    Int?
+  adults    Int?
+  children  Int?
+  currency  Currency
+  total     Decimal       @db.Decimal(10, 2)
+  breakdown Json?
+  status    BookingStatus
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  guest     User          @relation("UserBookings", fields: [guestId], references: [id])
+  listing   Listing       @relation(fields: [listingId], references: [id])
+  reviews   Review[]
+
+  @@index([listingId, startAt, endAt])
+  @@index([guestId, status])
+  @@schema("webapi")
+}
+
+model Review {
+  id        String          @id @default(uuid())
+  listingId String
+  authorId  String
+  bookingId String?
+  rating    Int
+  title     String?
+  comment   String?
+  status    ReviewStatus    @default(PENDING)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  author    User            @relation("UserReviews", fields: [authorId], references: [id])
+  booking   Booking?        @relation(fields: [bookingId], references: [id])
+  listing   Listing         @relation(fields: [listingId], references: [id])
+  helpful   ReviewHelpful[]
+  reply     ReviewReply?
+
+  @@unique([bookingId, authorId])
+  @@index([listingId, createdAt])
+  @@index([authorId, createdAt])
+  @@schema("webapi")
+}
+
+model ReviewReply {
+  id        String   @id @default(uuid())
+  reviewId  String   @unique
+  authorId  String
+  message   String
+  createdAt DateTime @default(now())
+  author    User     @relation("UserReviewReplies", fields: [authorId], references: [id])
+  review    Review   @relation(fields: [reviewId], references: [id])
+
+  @@schema("webapi")
+}
+
+model ReviewHelpful {
+  reviewId  String
+  userId    String
+  value     Int
+  createdAt DateTime @default(now())
+  review    Review   @relation(fields: [reviewId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@id([reviewId, userId])
+  @@schema("webapi")
+}
+
+model Favorite {
+  userId    String
+  listingId String
+  createdAt DateTime @default(now())
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@id([userId, listingId])
+  @@index([listingId, createdAt])
+  @@schema("webapi")
+}
+
+model Location {
+  id              String    @id @default(cuid())
+  name            String
+  countryCode     String
+  admin1          String?
+  admin2          String?
+  lat             Float
+  lng             Float
+  provider        String?
+  providerPlaceId String?   @unique
+  slug            String    @unique
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  listings        Listing[]
+
+  @@schema("webapi")
+}
+
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
+model event_types_staging {
+  event_type_en String?
+  event_type_es String?
+
+  @@ignore
+  @@schema("webapi")
+}
+
+/// *
+///  * ===================== Enums =====================
+enum CancellationPolicy {
+  VERY_FLEXIBLE
+  FLEXIBLE
+  STANDARD_30
+  STANDARD_90
+
+  @@schema("webapi")
+}
+
+enum InstantBookMode {
+  NONE
+  ALL
+
+  @@schema("webapi")
+}
+
+enum ActivityType {
+  MEETING
+  WORKSHOP
+  PRESENTATION
+  RETREAT
+  BIRTHDAY
+  NETWORKING
+  CORPORATE_PARTY
+  FILM_SHOOT
+  PHOTO_SHOOT
+  AUDIO_RECORDING
+  OTHER
+
+  @@schema("webapi")
+}
+
+enum AccuracyLevel {
+  CITY
+  STREET
+  ADDRESS
+
+  @@schema("webapi")
+}
+
+enum ModerationState {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@schema("webapi")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+
+  @@schema("public")
+}
+
+enum Role {
+  GUEST
+  HOST
+  GUIDE
+  SERVICE_ADMIN
+  ADMIN
+
+  @@schema("public")
+}
+
+enum Currency {
+  CLP
+  USD
+  EUR
+
+  @@schema("public")
+}
+
+enum KycStatus {
+  NONE
+  PENDING
+  VERIFIED
+  REJECTED
+
+  @@schema("public")
+}
+
+enum ListingCategory {
+  ALOJAMIENTO
+  EXPERIENCIA
+  SERVICIO
+
+  @@schema("webapi")
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING_PUBLISH
+  PUBLISHED
+  SUSPENDED
+  ARCHIVED
+
+  @@schema("webapi")
+}
+
+enum RoomKind {
+  ENTIRE
+  PRIVATE
+  SHARED
+
+  @@schema("webapi")
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+
+  @@schema("webapi")
+}
+
+enum FitnessLevel {
+  LOW
+  MID
+  HIGH
+
+  @@schema("webapi")
+}
+
+enum ServiceModality {
+  ONSITE
+  INSHOP
+  REMOTE
+
+  @@schema("webapi")
+}
+
+enum PriceModel {
+  NIGHTLY
+  PER_PERSON
+  HOURLY
+  FIXED
+
+  @@schema("webapi")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+
+  @@schema("webapi")
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  HIDDEN
+
+  @@schema("webapi")
+}
+
+enum MediaKind {
+  PHOTO
+  VIDEO
+  DOC
+
+  @@schema("webapi")
+}

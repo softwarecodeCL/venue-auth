@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: venueadmin
+      POSTGRES_PASSWORD: d6ah5c59   # Cambia esto por una contraseña fuerte
+      POSTGRES_DB: venue
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
