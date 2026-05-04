@@ -7,6 +7,15 @@ import { AuthGuard } from '@nestjs/passport';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { UpdateMeDto } from 'src/user/dto/update-me.dto';
 
+
+const cookieOptions = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'none' as const,
+  domain: '.apartha.com',
+  path: '/',
+};
+
 @Controller('auth')
 export class AuthController {
   environment = process.env.ENV == 'dev' ? false : true;
@@ -24,10 +33,13 @@ export class AuthController {
     const { accessToken, refreshToken } = await this.authService.login(dto);
 
     res.cookie('access_token', accessToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 55 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 60 * 60 * 1000,
     });
+
     res.cookie('refresh_token', refreshToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 50 * 24 * 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
     return res.send({ ok: true });
@@ -61,10 +73,13 @@ export class AuthController {
     const { accessToken, refreshToken } = await this.authService.rotateRefreshToken(rt);
 
     res.cookie('access_token', accessToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 60 * 60 * 1000,
     });
+
     res.cookie('refresh_token', refreshToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
     return res.send({ ok: true });
@@ -90,10 +105,13 @@ export class AuthController {
     const { accessToken, refreshToken } = await this.authService.loginWithOAuth((req as any).user);
 
     res.cookie('access_token', accessToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 60 * 60 * 1000,
     });
+
     res.cookie('refresh_token', refreshToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
     return res.redirect(process.env.FRONTEND_URL as string);
@@ -109,10 +127,13 @@ export class AuthController {
     const { accessToken, refreshToken } = await this.authService.loginWithOAuth((req as any).user);
 
     res.cookie('access_token', accessToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 15 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 60 * 60 * 1000,
     });
+
     res.cookie('refresh_token', refreshToken, {
-      httpOnly: true, secure: this.environment, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
     return res.redirect(process.env.FRONTEND_URL as string);
