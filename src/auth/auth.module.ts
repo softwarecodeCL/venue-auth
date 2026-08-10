@@ -4,9 +4,16 @@ import { AuthController } from './auth.controller';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { UserModule } from '../user/user.module';
+import { GoogleStrategy } from './strategies/google.strategy';
+import {
+  GoogleOAuthCallbackGuard,
+  GoogleOAuthStartGuard,
+} from './guards/google-oauth.guard';
 
 @Module({
   imports: [
+    UserModule,
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET,
@@ -14,6 +21,13 @@ import { PrismaService } from 'src/prisma/prisma.service';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, PrismaService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    GoogleStrategy,
+    GoogleOAuthStartGuard,
+    GoogleOAuthCallbackGuard,
+    PrismaService,
+  ],
 })
 export class AuthModule {}

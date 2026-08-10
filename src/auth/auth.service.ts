@@ -1,251 +1,478 @@
-// src/auth/auth.service.ts (añade/ajusta)
-import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { Prisma, Role, UserStatus } from '@prisma/client';
+import { compare, hash } from 'bcrypt';
+import { createHash, randomUUID } from 'node:crypto';
+import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { UpdateMeDto } from 'src/user/dto/update-me.dto';
-import type { Prisma } from '@prisma/client'
 
+const authUserSelect = {
+  id: true,
+  email: true,
+  name: true,
+  avatarUrl: true,
+  emailVerified: true,
+  locale: true,
+  phone: true,
+  phoneVerified: true,
+  status: true,
+  deletedAt: true,
+  activeMode: true,
+  profileCompletedAt: true,
+  roles: { select: { role: true } },
+} satisfies Prisma.UserSelect;
 
-type PublicUser = {
-  id: string;
-  email: string;
-  name: string | null;
-  avatarUrl: string | null;
-  locale: string | null;
-  phone: string | null;
+const loginUserSelect = {
+  ...authUserSelect,
+  passwordHash: true,
+} satisfies Prisma.UserSelect;
+
+type AuthUser = Prisma.UserGetPayload<{ select: typeof authUserSelect }>;
+type RefreshPayload = {
+  sub: string;
+  type: 'refresh';
+  jti: string;
+  familyId: string;
 };
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function tokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function parseDurationMs(
+  value: string | undefined,
+  fallbackMs: number,
+): number {
+  if (!value) return fallbackMs;
+
+  const match = /^(\d+)(s|m|h|d)$/i.exec(value.trim());
+  if (!match) return fallbackMs;
+
+  const amount = Number(match[1]);
+  const units: Record<string, number> = {
+    s: 1_000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  };
+
+  return amount * units[match[2].toLowerCase()];
+}
 
 @Injectable()
 export class AuthService {
-  
   constructor(
-    private prisma: PrismaService,
-    private jwtService: JwtService,
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
   ) {}
 
-   async register(dto: RegisterDto) {
-    const exists = await this.prisma.user.findUnique({ where: { email: dto.email } });
+  async register(dto: RegisterDto) {
+    const email = normalizeEmail(dto.email);
+    const exists = await this.prisma.user.findUnique({ where: { email } });
     if (exists) throw new BadRequestException('El email ya está registrado');
 
-    const passwordHash = await bcrypt.hash(dto.password, 12);
-
+    const passwordHash = await hash(dto.password, 12);
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
-        name: dto.name ?? null,
+        email,
+        name: dto.name.trim(),
         passwordHash,
         authProviders: {
-          create: { provider: 'local', providerUserId: dto.email },
+          create: { provider: 'local', providerUserId: email },
         },
+        roles: { create: { role: Role.GUEST } },
       },
-      select: { id: true, email: true, name: true },
+      select: authUserSelect,
     });
 
-    return user; // o { user } si prefieres
-  }
-  // login local
-async login(dto: LoginDto) {
-  const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
-  if (!user || !user.passwordHash) throw new UnauthorizedException('Credenciales inválidas');
-  const ok = await bcrypt.compare(dto.password, user.passwordHash);
-  if (!ok) throw new UnauthorizedException('Credenciales inválidas');
-
-  await this.prisma.user.update({
-    where: { id: user.id },
-    data: { lastLogin: new Date() },
-  });
-
-  const accessToken = this.signAccess({ sub: user.id, email: user.email });
-  const refreshToken = await this.issueRefresh(user.id);
-  return { accessToken, refreshToken, user: { id: user.id, name: user.name, email: user.email } };
-}
-
-
-  async rotateRefreshToken(rt: string | undefined) {
-    if (!rt) throw new UnauthorizedException('No refresh token');
-
-    const payload = this.verifyRefresh(rt); // { sub: string, type?: string }
-
-    // 1) Traer el usuario para obtener email (y validar que exista)
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
-    if (!user) throw new UnauthorizedException('Usuario no encontrado');
-
-    // 2) Firmar un nuevo access con email seguro desde DB
-    const accessToken = this.signAccess({ sub: user.id, email: user.email });
-
-    // 3) Rotar refresh
-    const refreshToken = await this.issueRefresh(user.id);
-
-    return { accessToken, refreshToken };
+    return this.toPublicUser(user);
   }
 
-  // revocación de refresh
-  async revokeRefreshToken(rt: string | undefined) {
-    if (!rt) return;
-    // opcional: marca como revocado en DB si lo persistes
-    return;
-  }
-
-  // helpers
-  private signAccess(payload: { sub: string; email: string }) {
-    return this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET!,
-      expiresIn: process.env.JWT_EXPIRES_IN || '1h',
+  async login(dto: LoginDto) {
+    const email = normalizeEmail(dto.email);
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: loginUserSelect,
     });
+
+    if (!user?.passwordHash) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    const matches = await compare(dto.password, user.passwordHash);
+    if (!matches) throw new UnauthorizedException('Credenciales inválidas');
+
+    this.assertActive(user);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { lastLogin: new Date() },
+    });
+
+    const tokens = await this.createSessionTokens(user);
+    return { ...tokens, user: this.toPublicUser(user) };
   }
 
-  private verifyRefresh(token: string) {
-    return this.jwtService.verify(token, {
-      secret: process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET!,
-    }) as { sub: string; type?: string }; // <- sin email aquí
+  async loginWithOAuth(profile: {
+    email: string | null;
+    name: string | null;
+    avatarUrl?: string | null;
+    locale?: string | null;
+    emailVerified?: boolean;
+    provider: 'google';
+    providerUserId?: string | null;
+  }) {
+    if (!profile.email || !profile.providerUserId) {
+      throw new UnauthorizedException('Google no entregó una identidad válida');
+    }
+    if (!profile.emailVerified) {
+      throw new UnauthorizedException(
+        'Google no confirmó el email de la cuenta',
+      );
+    }
+
+    const email = normalizeEmail(profile.email);
+    const providerUserId = profile.providerUserId;
+    const user = await this.prisma.$transaction(async (tx) => {
+      const provider = await tx.authProvider.findUnique({
+        where: {
+          provider_providerUserId: {
+            provider: profile.provider,
+            providerUserId,
+          },
+        },
+        select: { userId: true },
+      });
+
+      if (provider) {
+        return tx.user.update({
+          where: { id: provider.userId },
+          data: {
+            name: profile.name ?? undefined,
+            avatarUrl: profile.avatarUrl ?? undefined,
+            locale: profile.locale ?? undefined,
+            emailVerified: true,
+            lastLogin: new Date(),
+            roles: {
+              upsert: {
+                where: {
+                  userId_role: { userId: provider.userId, role: Role.GUEST },
+                },
+                create: { role: Role.GUEST },
+                update: {},
+              },
+            },
+          },
+          select: authUserSelect,
+        });
+      }
+
+      const existing = await tx.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+
+      if (existing) {
+        await tx.authProvider.create({
+          data: {
+            provider: profile.provider,
+            providerUserId,
+            userId: existing.id,
+          },
+        });
+
+        return tx.user.update({
+          where: { id: existing.id },
+          data: {
+            name: profile.name ?? undefined,
+            avatarUrl: profile.avatarUrl ?? undefined,
+            locale: profile.locale ?? undefined,
+            emailVerified: true,
+            lastLogin: new Date(),
+            roles: {
+              upsert: {
+                where: {
+                  userId_role: { userId: existing.id, role: Role.GUEST },
+                },
+                create: { role: Role.GUEST },
+                update: {},
+              },
+            },
+          },
+          select: authUserSelect,
+        });
+      }
+
+      return tx.user.create({
+        data: {
+          email,
+          name: profile.name,
+          avatarUrl: profile.avatarUrl ?? null,
+          locale: profile.locale ?? null,
+          emailVerified: true,
+          lastLogin: new Date(),
+          authProviders: {
+            create: {
+              provider: profile.provider,
+              providerUserId,
+            },
+          },
+          roles: { create: { role: Role.GUEST } },
+        },
+        select: authUserSelect,
+      });
+    });
+
+    this.assertActive(user);
+    const tokens = await this.createSessionTokens(user);
+    return { ...tokens, user: this.toPublicUser(user) };
   }
 
-  private async issueRefresh(userId: string) {
-    // si quieres máxima seguridad: genera aleatorio y guarda hash en DB; aquí simple con JWT:
+  async getAuthenticatedUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: authUserSelect,
+    });
+
+    if (!user) throw new UnauthorizedException('Sesión inválida');
+    this.assertActive(user);
+    return this.toPublicUser(user);
+  }
+
+  async rotateRefreshToken(token: string | undefined) {
+    if (!token) throw new UnauthorizedException('Sesión inválida');
+
+    const payload = this.verifyRefresh(token);
+    const hash = tokenHash(token);
+    const session = await this.prisma.refreshSession.findUnique({
+      where: { id: payload.jti },
+      include: { user: { select: authUserSelect } },
+    });
+
+    if (
+      !session ||
+      session.tokenHash !== hash ||
+      session.familyId !== payload.familyId
+    ) {
+      throw new UnauthorizedException('Sesión inválida');
+    }
+
+    if (session.revokedAt) {
+      await this.revokeFamily(session.familyId);
+      throw new UnauthorizedException('La sesión fue reutilizada o revocada');
+    }
+
+    if (session.expiresAt.getTime() <= Date.now()) {
+      await this.revokeFamily(session.familyId);
+      throw new UnauthorizedException('La sesión expiró');
+    }
+
+    this.assertActive(session.user);
+
+    const nextId = randomUUID();
+    const nextToken = this.signRefresh({
+      sub: session.userId,
+      jti: nextId,
+      familyId: session.familyId,
+      type: 'refresh',
+    });
+    const expiresAt = this.refreshExpiresAt();
+    const now = new Date();
+
+    const rotated = await this.prisma.$transaction(async (tx) => {
+      const rotated = await tx.refreshSession.updateMany({
+        where: { id: session.id, tokenHash: hash, revokedAt: null },
+        data: { revokedAt: now, lastUsedAt: now, replacedById: nextId },
+      });
+
+      if (rotated.count !== 1) return false;
+
+      await tx.refreshSession.create({
+        data: {
+          id: nextId,
+          userId: session.userId,
+          familyId: session.familyId,
+          tokenHash: tokenHash(nextToken),
+          expiresAt,
+        },
+      });
+      return true;
+    });
+
+    if (!rotated) {
+      await this.revokeFamily(session.familyId);
+      throw new UnauthorizedException('La sesión ya fue rotada');
+    }
+
+    return {
+      accessToken: this.signAccess(session.user),
+      refreshToken: nextToken,
+    };
+  }
+
+  async revokeRefreshToken(token: string | undefined) {
+    if (!token) return;
+
+    try {
+      const payload = this.verifyRefresh(token);
+      const session = await this.prisma.refreshSession.findFirst({
+        where: { id: payload.jti, tokenHash: tokenHash(token) },
+        select: { familyId: true },
+      });
+
+      if (session) await this.revokeFamily(session.familyId);
+    } catch {
+      // Logout is idempotent and must not reveal token validation details.
+    }
+  }
+
+  private async createSessionTokens(user: AuthUser) {
+    return {
+      accessToken: this.signAccess(user),
+      refreshToken: await this.issueRefresh(user.id),
+    };
+  }
+
+  private signAccess(user: AuthUser) {
     return this.jwtService.sign(
-      { sub: userId, type: 'refresh' },
       {
-        secret: process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET!,
-        expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
+        sub: user.id,
+        email: user.email,
+        type: 'access',
+        roles: user.roles.map(({ role }) => role),
+        phoneVerified: user.phoneVerified,
+        activeMode: user.activeMode,
+      },
+      {
+        secret: this.accessSecret(),
+        expiresIn: process.env.JWT_EXPIRES_IN || '50m',
       },
     );
   }
 
-async loginWithOAuth(profile: {
-  email: string | null; name: string | null; avatarUrl?: string | null;
-  locale?: string | null; emailVerified?: boolean;
-  provider: 'google'; providerUserId?: string | null;
-  phone?: string | null;
-}) {
-  if (!profile?.email) throw new UnauthorizedException('Perfil sin email');
-
-  // un select único para mantener el mismo shape SIEMPRE
-  const select = {
-    id: true,
-    email: true,
-    name: true,
-    avatarUrl: true,
-    locale: true,
-    phone: true,
-  } as const;
-
-  const found = await this.prisma.user.findUnique({
-    where: { email: profile.email },
-    select,
-  });
-
-  let user: PublicUser;
-
-  if (!found) {
-    user = await this.prisma.user.create({
-      data: {
-        email: profile.email!,
-        name: profile.name,
-        avatarUrl: profile.avatarUrl ?? null,
-        emailVerified: profile.emailVerified ?? false,
-        locale: profile.locale ?? null,
-        lastLogin: new Date(),
-        authProviders: {
-          create: {
-            provider: 'google',
-            providerUserId: profile.providerUserId ?? profile.email!,
-          },
-        },
-      },
-      select,
+  private async issueRefresh(userId: string) {
+    const id = randomUUID();
+    const familyId = randomUUID();
+    const token = this.signRefresh({
+      sub: userId,
+      type: 'refresh',
+      jti: id,
+      familyId,
     });
-  } else {
-    user = await this.prisma.user.update({
-      where: { id: found.id },
+
+    await this.prisma.refreshSession.create({
       data: {
-        name: found.name ?? profile.name,
-        avatarUrl: profile.avatarUrl ?? found.avatarUrl,
-        emailVerified: profile.emailVerified ?? true, // o lo que prefieras
-        locale: profile.locale ?? found.locale,
-        lastLogin: new Date(),
+        id,
+        userId,
+        familyId,
+        tokenHash: tokenHash(token),
+        expiresAt: this.refreshExpiresAt(),
       },
-      select,
+    });
+
+    return token;
+  }
+
+  private signRefresh(payload: RefreshPayload) {
+    const ttlMs = this.refreshTtlMs();
+    return this.jwtService.sign(payload, {
+      secret: this.refreshSecret(),
+      expiresIn: Math.floor(ttlMs / 1_000),
     });
   }
 
-  const accessToken = this.signAccess({ sub: user.id, email: user.email });
-  const refreshToken = await this.issueRefresh(user.id);
+  private verifyRefresh(token: string): RefreshPayload {
+    try {
+      const payload = this.jwtService.verify<RefreshPayload>(token, {
+        secret: this.refreshSecret(),
+      });
 
-  return { accessToken, refreshToken, user };
-}
+      if (
+        payload.type !== 'refresh' ||
+        !payload.sub ||
+        !payload.jti ||
+        !payload.familyId
+      ) {
+        throw new Error('Invalid refresh payload');
+      }
 
-  async updateProfile(userId: string, dto: UpdateMeDto) {
-    const data: Prisma.UserUpdateInput = {
-      name:      dto.name      ?? undefined,
-      avatarUrl: dto.avatarUrl ?? undefined,
-      locale:    dto.locale    ?? undefined,
-      phone:     dto.phone     ?? undefined,
-      aboutMe:   dto.aboutMe   ?? undefined,
-
-      contactInfo: dto.contactInfo
-        ? {
-            upsert: {
-              create: {
-                address1:  dto.contactInfo.address1  ?? null,
-                city:      dto.contactInfo.city      ?? null,
-                state:     dto.contactInfo.state     ?? null,
-                country:   dto.contactInfo.country   ?? null,
-                zipCode:   dto.contactInfo.zipCode   ?? null,
-                latitude:  dto.contactInfo.latitude  ?? null,
-                longitude: dto.contactInfo.longitude ?? null,
-              },
-              update: {
-                address1:  dto.contactInfo.address1  ?? null,
-                city:      dto.contactInfo.city      ?? null,
-                state:     dto.contactInfo.state     ?? null,
-                country:   dto.contactInfo.country   ?? null,
-                zipCode:   dto.contactInfo.zipCode   ?? null,
-                latitude:  dto.contactInfo.latitude  ?? null,
-                longitude: dto.contactInfo.longitude ?? null,
-              },
-            },
-          }
-        : undefined,
-
-      socialAccounts: dto.socialAccounts
-        ? {
-            upsert: {
-              create: {
-                facebook:   dto.socialAccounts.facebook   ?? null,
-                twitter:    dto.socialAccounts.twitter    ?? null,
-                linkedIn:   dto.socialAccounts.linkedIn   ?? null,
-                dribbble:   dto.socialAccounts.dribbble   ?? null,
-                pinterest:  dto.socialAccounts.pinterest  ?? null,
-                vimeoUrl:   dto.socialAccounts.vimeoUrl   ?? null,
-                youtubeUrl: dto.socialAccounts.youtubeUrl ?? null,
-                websiteUrl: dto.socialAccounts.websiteUrl ?? null,
-              },
-              update: {
-                facebook:   dto.socialAccounts.facebook   ?? null,
-                twitter:    dto.socialAccounts.twitter    ?? null,
-                linkedIn:   dto.socialAccounts.linkedIn   ?? null,
-                dribbble:   dto.socialAccounts.dribbble   ?? null,
-                pinterest:  dto.socialAccounts.pinterest  ?? null,
-                vimeoUrl:   dto.socialAccounts.vimeoUrl   ?? null,
-                youtubeUrl: dto.socialAccounts.youtubeUrl ?? null,
-                websiteUrl: dto.socialAccounts.websiteUrl ?? null,
-              },
-            },
-          }
-        : undefined,
+      return payload;
+    } catch {
+      throw new UnauthorizedException('Sesión inválida');
     }
+  }
 
-    return this.prisma.user.update({
-      where: { id: userId },
-      data,
-      select: {
-        id: true, email: true, name: true, avatarUrl: true, emailVerified: true,
-        phone: true, aboutMe: true, locale: true, createdAt: true, updatedAt: true,
-        contactInfo: true, socialAccounts: true,
+  private async revokeFamily(familyId: string) {
+    await this.prisma.refreshSession.updateMany({
+      where: { familyId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  private refreshTtlMs() {
+    return parseDurationMs(
+      process.env.JWT_REFRESH_EXPIRES_IN,
+      30 * 24 * 60 * 60 * 1_000,
+    );
+  }
+
+  private refreshExpiresAt() {
+    return new Date(Date.now() + this.refreshTtlMs());
+  }
+
+  private accessSecret() {
+    if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is not set');
+    return process.env.JWT_SECRET;
+  }
+
+  private refreshSecret() {
+    if (!process.env.JWT_REFRESH_SECRET) {
+      throw new Error('JWT_REFRESH_SECRET is not set');
+    }
+    return process.env.JWT_REFRESH_SECRET;
+  }
+
+  private assertActive(user: { status: UserStatus; deletedAt: Date | null }) {
+    if (user.status !== UserStatus.ACTIVE || user.deletedAt) {
+      throw new UnauthorizedException('La cuenta no está activa');
+    }
+  }
+
+  private toPublicUser(user: AuthUser) {
+    const roles = user.roles.map(({ role }) => role);
+    const profileCompleted = Boolean(user.profileCompletedAt);
+    const onboardingCompleted = profileCompleted && user.phoneVerified;
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      emailVerified: user.emailVerified,
+      locale: user.locale,
+      phone: user.phone,
+      phoneVerified: user.phoneVerified,
+      status: user.status,
+      roles,
+      activeMode: user.activeMode,
+      onboarding: {
+        profileCompleted,
+        phoneVerified: user.phoneVerified,
+        completed: onboardingCompleted,
+        nextStep: !profileCompleted
+          ? 'PROFILE'
+          : !user.phoneVerified
+            ? 'PHONE_VERIFICATION'
+            : 'COMPLETE',
       },
-    })
+    };
   }
 }

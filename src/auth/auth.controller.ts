@@ -1,142 +1,129 @@
-import { Body, Controller, Get, Patch, Post, Req, Res, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { UserService } from '../user/user.service';
+import { UpdateMeDto } from '../user/dto/update-me.dto';
+import { authCookieOptions } from './auth-cookies';
 import { AuthService } from './auth.service';
-import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { AuthGuard } from '@nestjs/passport';
+import { RegisterDto } from './dto/register.dto';
+import {
+  GoogleOAuthCallbackGuard,
+  GoogleOAuthStartGuard,
+} from './guards/google-oauth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { UpdateMeDto } from 'src/user/dto/update-me.dto';
 
-const isProd = process.env.NODE_ENV === 'production';
+type SessionUser = Awaited<ReturnType<AuthService['getAuthenticatedUser']>>;
+type AuthenticatedRequest = Request & { user: SessionUser };
+type GoogleProfile = Parameters<AuthService['loginWithOAuth']>[0];
+type GoogleCallbackRequest = Request & { user: GoogleProfile };
 
-const cookieOptions = {
-  httpOnly: true,
-  secure: isProd,
-  sameSite: isProd ? 'none' as const : 'lax' as const,
-  path: '/',
-  ...(isProd ? { domain: '.apartha.com' } : {}),
-};
+function cookie(request: Request, name: string): string | undefined {
+  const cookies = (request as unknown as { cookies?: Record<string, unknown> })
+    .cookies;
+  const value = cookies?.[name];
+  return typeof value === 'string' ? value : undefined;
+}
 
 @Controller('auth')
 export class AuthController {
-  environment = process.env.ENV == 'dev' ? false : true;
-
-  
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly userService: UserService,
+  ) {}
 
   @Post('register')
-  async register(@Body() dto: RegisterDto) {
+  register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
   @Post('login')
-  async login(@Body() dto: LoginDto, @Res() res: Response) {
-    const { accessToken, refreshToken } = await this.authService.login(dto);
-
-    res.cookie('access_token', accessToken, {
-      ...cookieOptions,
-      maxAge: 60 * 60 * 1000,
-    });
-
-    res.cookie('refresh_token', refreshToken, {
-      ...cookieOptions,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
-
-    return res.send({ ok: true });
+  async login(@Body() dto: LoginDto, @Res() response: Response) {
+    const { accessToken, refreshToken, user } =
+      await this.authService.login(dto);
+    this.setSessionCookies(response, accessToken, refreshToken);
+    return response.send({ ok: true, user });
   }
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  me(@Req() req: Request) {
-    return (req as any).user;
+  me(@Req() request: AuthenticatedRequest) {
+    return request.user;
   }
 
+  // Backwards-compatible alias. New clients should use PATCH /users/me.
   @Patch('me')
   @UseGuards(JwtAuthGuard)
-  // Fuerza la pipe aquí (para descartar problemas globales)
-  @UsePipes(new ValidationPipe({
-    whitelist: true,
-    transform: true,
-    transformOptions: { enableImplicitConversion: true },
-  }))
-
-  async updateMe(@Req() req: Request, @Body() dto: UpdateMeDto) {
-    const userId = (req as any).user?.sub ?? (req as any).user?.id;
-    console.log('DTO class =', (dto as any)?.constructor?.name);
-    return this.authService.updateProfile(userId, dto as any);
+  updateMe(@Req() request: AuthenticatedRequest, @Body() dto: UpdateMeDto) {
+    return this.userService.updateMe(request.user.id, dto);
   }
 
-
   @Post('refresh')
-  async refresh(@Req() req: Request, @Res() res: Response) {
-    const rt = (req as any).cookies?.refresh_token;
-    const { accessToken, refreshToken } = await this.authService.rotateRefreshToken(rt);
+  async refresh(@Req() request: Request, @Res() response: Response) {
+    const token = cookie(request, 'refresh_token');
+    const { accessToken, refreshToken } =
+      await this.authService.rotateRefreshToken(token);
 
-    res.cookie('access_token', accessToken, {
-      ...cookieOptions,
-      maxAge: 60 * 60 * 1000,
-    });
-
-    res.cookie('refresh_token', refreshToken, {
-      ...cookieOptions,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
-
-    return res.send({ ok: true });
+    this.setSessionCookies(response, accessToken, refreshToken);
+    return response.send({ ok: true });
   }
 
   @Post('logout')
-  async logout(@Req() req: Request, @Res() res: Response) {
-    const rt = (req as any).cookies?.refresh_token;
-    await this.authService.revokeRefreshToken(rt);
+  async logout(@Req() request: Request, @Res() response: Response) {
+    await this.authService.revokeRefreshToken(cookie(request, 'refresh_token'));
 
-    res.clearCookie('access_token');
-    res.clearCookie('refresh_token');
-    return res.send({ ok: true });
+    const options = authCookieOptions();
+    response.clearCookie('access_token', options);
+    response.clearCookie('refresh_token', options);
+    return response.send({ ok: true });
   }
 
   @Get('google')
-  @UseGuards(AuthGuard('google'))
-  async googleAuth() {}
+  @UseGuards(GoogleOAuthStartGuard)
+  googleAuth() {}
 
   @Get('google/callback')
-  @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(@Req() req: Request, @Res() res: Response) {
-    const { accessToken, refreshToken } = await this.authService.loginWithOAuth((req as any).user);
+  @UseGuards(GoogleOAuthCallbackGuard)
+  async googleAuthRedirect(
+    @Req() request: GoogleCallbackRequest,
+    @Res() response: Response,
+  ) {
+    const { accessToken, refreshToken, user } =
+      await this.authService.loginWithOAuth(request.user);
 
-    res.cookie('access_token', accessToken, {
-      ...cookieOptions,
-      maxAge: 60 * 60 * 1000,
-    });
+    this.setSessionCookies(response, accessToken, refreshToken);
 
-    res.cookie('refresh_token', refreshToken, {
-      ...cookieOptions,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    const frontendUrl = (
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    ).replace(/\/$/, '');
+    const destination = user.onboarding.profileCompleted
+      ? frontendUrl
+      : `${frontendUrl}/onboarding`;
 
-    return res.redirect(process.env.FRONTEND_URL as string);
+    return response.redirect(destination);
   }
 
-  @Get('facebook')
-  @UseGuards(AuthGuard('facebook'))
-  async facebookAuth() {}
-
-  @Get('facebook/callback')
-  @UseGuards(AuthGuard('facebook'))
-  async facebookCallback(@Req() req: Request, @Res() res: Response) {
-    const { accessToken, refreshToken } = await this.authService.loginWithOAuth((req as any).user);
-
-    res.cookie('access_token', accessToken, {
-      ...cookieOptions,
-      maxAge: 60 * 60 * 1000,
+  private setSessionCookies(
+    response: Response,
+    accessToken: string,
+    refreshToken: string,
+  ) {
+    const options = authCookieOptions();
+    response.cookie('access_token', accessToken, {
+      ...options,
+      maxAge: 50 * 60 * 1_000,
     });
-
-    res.cookie('refresh_token', refreshToken, {
-      ...cookieOptions,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+    response.cookie('refresh_token', refreshToken, {
+      ...options,
+      maxAge: 30 * 24 * 60 * 60 * 1_000,
     });
-
-    return res.redirect(process.env.FRONTEND_URL as string);
   }
 }

@@ -1,35 +1,39 @@
 // src/auth/strategies/jwt.strategy.ts
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Strategy } from 'passport-jwt';
 import type { Request } from 'express';
-import { PrismaService } from '../../prisma/prisma.service';
-import type { Prisma } from '@prisma/client'
+import { AuthService } from '../auth.service';
 
 function cookieExtractor(req: Request): string | null {
-  // lee solo desde la cookie HttpOnly "access_token"
-  return req?.cookies?.access_token ?? null;
+  const cookies = (req as unknown as { cookies?: Record<string, unknown> })
+    .cookies;
+  const token = cookies?.access_token;
+  return typeof token === 'string' ? token : null;
+}
+
+function bearerExtractor(req: Request): string | null {
+  const authorization = req.headers.authorization;
+  if (!authorization?.startsWith('Bearer ')) return null;
+  return authorization.slice(7).trim() || null;
 }
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private prisma: PrismaService) {
+  constructor(private readonly authService: AuthService) {
     if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is not set');
     super({
-      jwtFromRequest: ExtractJwt.fromExtractors([cookieExtractor]),
+      jwtFromRequest: (request: Request) =>
+        cookieExtractor(request) ?? bearerExtractor(request),
       ignoreExpiration: false,
       secretOrKey: process.env.JWT_SECRET,
     });
   }
 
-  async validate(payload: { sub: string }) {
-    console.log("<-------------------------------->");
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, email: true, name: true, avatarUrl: true, locale: true, phone: true, aboutMe: true },
-    });
-    
-    if (!user) throw new UnauthorizedException();
-    return user; // ← esto será req.user en /auth/me
+  async validate(payload: { sub: string; type?: string }) {
+    if (!payload.sub || (payload.type && payload.type !== 'access')) {
+      throw new UnauthorizedException('Token de acceso inválido');
+    }
+    return this.authService.getAuthenticatedUser(payload.sub);
   }
 }

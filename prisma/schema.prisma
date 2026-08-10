@@ -11,40 +11,61 @@ datasource db {
 /// *
 ///  * ===================== User & Auth =====================
 model User {
-  id                String                @id @default(uuid())
-  email             String                @unique
-  name              String?
-  passwordHash      String?
-  avatarUrl         String?
-  emailVerified     Boolean               @default(false)
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
-  lastLogin         DateTime?
-  locale            String?
-  aboutMe           String?
-  phone             String?
-  defaultCurrency   Currency?
-  deletedAt         DateTime?
-  marketingOptIn    Boolean               @default(false)
-  phoneVerified     Boolean               @default(false)
-  privacyAcceptedAt DateTime?
-  status            UserStatus            @default(ACTIVE)
-  termsAcceptedAt   DateTime?
-  timezone          String?
-  twoFactorEnabled  Boolean               @default(false)
-  authProviders     AuthProvider[]
-  contactInfo       ContactInformation?
-  notifications     NotificationSetting[]
-  providerProfile   ProviderProfile?
-  socialAccounts    SocialAccounts?
-  roles             UserRole[]
-  bookings          Booking[]             @relation("UserBookings")
-  favorites         Favorite[]
-  listings          Listing[]
-  reviews           Review[]              @relation("UserReviews")
-  reviewHelpful     ReviewHelpful[]
-  reviewReplies     ReviewReply[]         @relation("UserReviewReplies")
+  id                 String                @id @default(uuid())
+  email              String                @unique
+  name               String?
+  passwordHash       String?
+  avatarUrl          String?
+  emailVerified      Boolean               @default(false)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  lastLogin          DateTime?
+  locale             String?
+  aboutMe            String?
+  activeMode         ProfileMode           @default(GUEST)
+  profileCompletedAt DateTime?
+  phone              String?
+  defaultCurrency    Currency?
+  deletedAt          DateTime?
+  marketingOptIn     Boolean               @default(false)
+  phoneVerified      Boolean               @default(false)
+  privacyAcceptedAt  DateTime?
+  status             UserStatus            @default(ACTIVE)
+  termsAcceptedAt    DateTime?
+  timezone           String?
+  twoFactorEnabled   Boolean               @default(false)
+  authProviders      AuthProvider[]
+  contactInfo        ContactInformation?
+  notifications      NotificationSetting[]
+  providerProfile    ProviderProfile?
+  socialAccounts     SocialAccounts?
+  roles              UserRole[]
+  refreshSessions    RefreshSession[]
+  bookings           Booking[]             @relation("UserBookings")
+  favorites          Favorite[]
+  listings           Listing[]
+  reviews            Review[]              @relation("UserReviews")
+  reviewHelpful      ReviewHelpful[]
+  reviewReplies      ReviewReply[]         @relation("UserReviewReplies")
 
+  @@schema("public")
+}
+
+model RefreshSession {
+  id           String    @id @default(uuid())
+  userId       String
+  familyId     String
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId, revokedAt])
+  @@index([expiresAt])
   @@schema("public")
 }
 
@@ -782,6 +803,13 @@ enum Role {
   GUIDE
   SERVICE_ADMIN
   ADMIN
+
+  @@schema("public")
+}
+
+enum ProfileMode {
+  GUEST
+  HOST
 
   @@schema("public")
 }
