@@ -7,13 +7,14 @@ import { AuthGuard } from '@nestjs/passport';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { UpdateMeDto } from 'src/user/dto/update-me.dto';
 
+const isProd = process.env.NODE_ENV === 'production';
 
 const cookieOptions = {
   httpOnly: true,
-  secure: true,
-  sameSite: 'none' as const,
-  domain: '.apartha.com',
+  secure: isProd,
+  sameSite: isProd ? 'none' as const : 'lax' as const,
   path: '/',
+  ...(isProd ? { domain: '.apartha.com' } : {}),
 };
 
 @Controller('auth')

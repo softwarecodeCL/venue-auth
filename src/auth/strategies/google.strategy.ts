@@ -52,7 +52,6 @@ async validate(
       provider: 'google',
       providerUserId: profile?.id ?? email ?? undefined,
       emailVerified,
-//      returnTo: req?.query?.state ?? null,
     };
 
     return done(null, userPayload);
