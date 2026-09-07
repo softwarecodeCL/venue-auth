@@ -22,13 +22,15 @@ model User {
   lastLogin          DateTime?
   locale             String?
   aboutMe            String?
-  activeMode         ProfileMode           @default(GUEST)
   profileCompletedAt DateTime?
   phone              String?
   defaultCurrency    Currency?
   deletedAt          DateTime?
   marketingOptIn     Boolean               @default(false)
   phoneVerified      Boolean               @default(false)
+  phoneVerifiedAt    DateTime?
+  PhoneIdentity      PhoneIdentity?
+  PhoneVerificationChallenge PhoneVerificationChallenge[]
   privacyAcceptedAt  DateTime?
   status             UserStatus            @default(ACTIVE)
   termsAcceptedAt    DateTime?
@@ -48,6 +50,37 @@ model User {
   reviewHelpful      ReviewHelpful[]
   reviewReplies      ReviewReply[]         @relation("UserReviewReplies")
 
+  @@schema("public")
+}
+
+model PhoneIdentity {
+  userId     String   @id
+  phoneE164  String   @unique
+  verifiedAt DateTime @default(now())
+  User       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@schema("public")
+}
+
+model PhoneVerificationChallenge {
+  id            String    @id @default(uuid())
+  userId        String
+  phoneE164     String
+  codeHash      String
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(5)
+  sentAt        DateTime?
+  expiresAt     DateTime
+  resendAfter   DateTime
+  consumedAt    DateTime?
+  invalidatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  User          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([phoneE164, createdAt])
+  @@index([expiresAt])
   @@schema("public")
 }
 
@@ -818,6 +851,7 @@ enum Currency {
   CLP
   USD
   EUR
+  MXN
 
   @@schema("public")
 }

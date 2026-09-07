@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
-import { ProfileMode, Role } from '@prisma/client';
+import { Role } from '@prisma/client';
 import { UserService } from './user.service';
 
 describe('UserService', () => {
@@ -21,14 +21,13 @@ describe('UserService', () => {
 
     await service.completeProfile('user-1', {
       name: ' Marco ',
-      mode: ProfileMode.HOST,
+      mode: Role.HOST,
     });
 
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'user-1' },
       data: expect.objectContaining({
         name: 'Marco',
-        activeMode: ProfileMode.HOST,
         profileCompletedAt: expect.any(Date),
       }),
     });

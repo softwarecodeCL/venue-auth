@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 import { UnauthorizedException } from '@nestjs/common';
-import { ProfileMode, Role, UserStatus } from '@prisma/client';
+import { Role, UserStatus } from '@prisma/client';
 import { AuthService } from './auth.service';
 
 const userRecord = (overrides: Record<string, unknown> = {}) => ({
@@ -14,7 +14,6 @@ const userRecord = (overrides: Record<string, unknown> = {}) => ({
   phoneVerified: false,
   status: UserStatus.ACTIVE,
   deletedAt: null,
-  activeMode: ProfileMode.GUEST,
   profileCompletedAt: null,
   roles: [{ role: Role.GUEST }],
   ...overrides,
@@ -139,5 +138,12 @@ describe('AuthService', () => {
       service.rotateRefreshToken('access-token'),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(prisma.refreshSession.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('ignores refresh session errors during logout so the endpoint stays resilient', async () => {
+    jwt.verify.mockReturnValue({ sub: 'user-1', type: 'refresh', jti: 'sid-1', familyId: 'family-1' });
+    prisma.refreshSession.findFirst.mockRejectedValue(new Error('db down'));
+
+    await expect(service.revokeRefreshToken('refresh-token')).resolves.toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
-import { ProfileMode } from '@prisma/client';
-import { IsEnum, IsString, MaxLength, MinLength } from 'class-validator';
+import { Role } from '@prisma/client';
+import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CompleteProfileDto {
   @IsString()
@@ -7,6 +7,6 @@ export class CompleteProfileDto {
   @MaxLength(80)
   name: string;
 
-  @IsEnum(ProfileMode)
-  mode: ProfileMode;
+  @IsIn([Role.GUEST, Role.HOST])
+  mode: Role;
 }

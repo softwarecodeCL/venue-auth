@@ -78,7 +78,13 @@ export class AuthController {
 
   @Post('logout')
   async logout(@Req() request: Request, @Res() response: Response) {
-    await this.authService.revokeRefreshToken(cookie(request, 'refresh_token'));
+    try {
+      await this.authService.revokeRefreshToken(
+        cookie(request, 'refresh_token'),
+      );
+    } catch {
+      // Logout must be idempotent and never fail the client session cleanup.
+    }
 
     const options = authCookieOptions();
     response.clearCookie('access_token', options);

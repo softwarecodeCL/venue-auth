@@ -96,3 +96,17 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+## habilitar numeros en aws
+aws pinpoint-sms-voice-v2 create-verified-destination-number --destination-phone-number "+569XXXXXXXX" --region us-east-1
+
+{
+  "VerifiedDestinationNumberId": "vdn-xxxxxxxx"
+}
+
+aws pinpoint-sms-voice-v2 send-destination-number-verification-code --verified-destination-number-id "vdn-64b8cc528b56410e8d92a7889b1dbf85" --verification-channel TEXT --origination-identity "pool-1b99c3f19a0e4607b8ed0d37cfa51275" --language-code ES_419 --region us-east-1
+
+aws pinpoint-sms-voice-v2 verify-destination-number --verified-destination-number-id "vdn-xxxxxxxx" --verification-code "CODIGO_RECIBIDO" --region us-east-1
+
+
+aws pinpoint-sms-voice-v2 create-verified-destination-number --destination-phone-number "+5212223078888" --region us-east-1

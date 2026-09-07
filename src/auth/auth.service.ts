@@ -20,9 +20,9 @@ const authUserSelect = {
   locale: true,
   phone: true,
   phoneVerified: true,
+  phoneVerifiedAt: true,
   status: true,
   deletedAt: true,
-  activeMode: true,
   profileCompletedAt: true,
   roles: { select: { role: true } },
 } satisfies Prisma.UserSelect;
@@ -349,7 +349,6 @@ export class AuthService {
         type: 'access',
         roles: user.roles.map(({ role }) => role),
         phoneVerified: user.phoneVerified,
-        activeMode: user.activeMode,
       },
       {
         secret: this.accessSecret(),
@@ -411,10 +410,14 @@ export class AuthService {
   }
 
   private async revokeFamily(familyId: string) {
-    await this.prisma.refreshSession.updateMany({
-      where: { familyId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    try {
+      await this.prisma.refreshSession.updateMany({
+        where: { familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    } catch {
+      // Ignore session cleanup errors during logout; the client should still be signed out.
+    }
   }
 
   private refreshTtlMs() {
@@ -460,9 +463,9 @@ export class AuthService {
       locale: user.locale,
       phone: user.phone,
       phoneVerified: user.phoneVerified,
+      phoneVerifiedAt: user.phoneVerifiedAt,
       status: user.status,
       roles,
-      activeMode: user.activeMode,
       onboarding: {
         profileCompleted,
         phoneVerified: user.phoneVerified,

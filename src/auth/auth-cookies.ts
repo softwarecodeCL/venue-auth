@@ -29,8 +29,10 @@ export function authCookieOptions(): CookieOptions {
 }
 
 export function oauthStateCookieOptions(): CookieOptions {
+  const { domain: _domain, ...options } = authCookieOptions();
   return {
-    ...authCookieOptions(),
+    ...options,
+    sameSite: 'lax',
     path: '/auth/google',
   };
 }

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, ProfileMode, Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateMeDto } from 'src/user/dto/update-me.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
@@ -27,7 +27,6 @@ const userSelect = {
   phone: true,
   phoneVerified: true,
   aboutMe: true,
-  activeMode: true,
   profileCompletedAt: true,
   roles: { select: { role: true } },
   contactInfo: {
@@ -164,7 +163,6 @@ export class UserService {
         where: { id: userId },
         data: {
           name,
-          activeMode: dto.mode,
           profileCompletedAt: new Date(),
         },
       });
@@ -175,7 +173,7 @@ export class UserService {
         update: {},
       });
 
-      if (dto.mode === ProfileMode.HOST) {
+      if (dto.mode === Role.HOST) {
         await tx.userRole.upsert({
           where: { userId_role: { userId, role: Role.HOST } },
           create: { userId, role: Role.HOST },
@@ -210,7 +208,6 @@ export class UserService {
         updatedAt: true,
         lastLogin: true,
         locale: true,
-        activeMode: true,
         profileCompletedAt: true,
         roles: { select: { role: true } },
         // Relaciones
