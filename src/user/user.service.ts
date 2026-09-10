@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateMeDto } from 'src/user/dto/update-me.dto';
@@ -68,6 +68,9 @@ export class UserService {
   }
 
   async updateMe(userId: string, dto: UpdateMeDto) {
+    if (dto.name !== undefined && (typeof dto.name !== 'string' || dto.name.trim().length < 2)) {
+      throw new BadRequestException('El nombre debe tener al menos dos caracteres');
+    }
     return this.prisma.$transaction(async (tx) => {
       // Top-level User: usa toSet (puede devolver string | null | undefined)
       const userPatch: Prisma.UserUpdateInput = {

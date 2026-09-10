@@ -14,6 +14,8 @@ model User {
   id                 String                @id @default(uuid())
   email              String                @unique
   name               String?
+  sessionVersion Int @default(0)
+  passwordResetTokens PasswordResetToken[]
   passwordHash       String?
   avatarUrl          String?
   emailVerified      Boolean               @default(false)
@@ -948,4 +950,24 @@ enum MediaKind {
   DOC
 
   @@schema("webapi")
+}
+
+model PasswordResetToken {
+  id String @id @default(uuid())
+  userId String
+  tokenHash String @unique
+  expiresAt DateTime
+  usedAt DateTime?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
+  @@schema("public")
+}
+model AuthRateLimit {
+  key String @id
+  attempts Int @default(0)
+  expiresAt DateTime
+  @@index([expiresAt])
+  @@schema("public")
 }

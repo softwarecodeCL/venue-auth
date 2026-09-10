@@ -4,6 +4,7 @@ import { Role, UserStatus } from '@prisma/client';
 import { AuthService } from './auth.service';
 
 const userRecord = (overrides: Record<string, unknown> = {}) => ({
+  sessionVersion: 0,
   id: 'user-1',
   email: 'user@example.com',
   name: 'Marco',
@@ -55,6 +56,12 @@ describe('AuthService', () => {
       verify: jest.fn(),
     };
     service = new AuthService(prisma, jwt);
+  });
+
+  it('rejects access tokens from before a password change', async () => {
+    prisma.user.findUnique.mockResolvedValue(userRecord({ sessionVersion: 1 }));
+    await expect(service.getAuthenticatedUser('user-1', 0)).rejects.toThrow(UnauthorizedException);
+    await expect(service.getAuthenticatedUser('user-1', 1)).resolves.toMatchObject({ id: 'user-1' });
   });
 
   it('creates every local account with the GUEST role', async () => {

@@ -30,10 +30,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; type?: string }) {
+  async validate(payload: { sub: string; type?: string; version?: number }) {
     if (!payload.sub || (payload.type && payload.type !== 'access')) {
       throw new UnauthorizedException('Token de acceso inválido');
     }
-    return this.authService.getAuthenticatedUser(payload.sub);
+    return this.authService.getAuthenticatedUser(payload.sub, payload.version ?? 0);
   }
 }

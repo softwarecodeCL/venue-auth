@@ -12,6 +12,8 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
 const authUserSelect = {
+  sessionVersion: true,
+  passwordHash: true,
   id: true,
   email: true,
   name: true,
@@ -36,6 +38,7 @@ type AuthUser = Prisma.UserGetPayload<{ select: typeof authUserSelect }>;
 type RefreshPayload = {
   sub: string;
   type: 'refresh';
+  version?: number;
   jti: string;
   familyId: string;
 };
@@ -156,7 +159,6 @@ export class AuthService {
         return tx.user.update({
           where: { id: provider.userId },
           data: {
-            name: profile.name ?? undefined,
             avatarUrl: profile.avatarUrl ?? undefined,
             locale: profile.locale ?? undefined,
             emailVerified: true,
@@ -192,7 +194,6 @@ export class AuthService {
         return tx.user.update({
           where: { id: existing.id },
           data: {
-            name: profile.name ?? undefined,
             avatarUrl: profile.avatarUrl ?? undefined,
             locale: profile.locale ?? undefined,
             emailVerified: true,
@@ -236,13 +237,13 @@ export class AuthService {
     return { ...tokens, user: this.toPublicUser(user) };
   }
 
-  async getAuthenticatedUser(userId: string) {
+  async getAuthenticatedUser(userId: string, version = 0) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: authUserSelect,
     });
 
-    if (!user) throw new UnauthorizedException('Sesión inválida');
+    if (!user || user.sessionVersion !== version) throw new UnauthorizedException('Sesión inválida');
     this.assertActive(user);
     return this.toPublicUser(user);
   }
@@ -276,6 +277,7 @@ export class AuthService {
     }
 
     this.assertActive(session.user);
+    if ((payload.version ?? 0) !== session.user.sessionVersion) throw new UnauthorizedException('Sesión revocada');
 
     const nextId = randomUUID();
     const nextToken = this.signRefresh({
@@ -283,6 +285,7 @@ export class AuthService {
       jti: nextId,
       familyId: session.familyId,
       type: 'refresh',
+      version: session.user.sessionVersion,
     });
     const expiresAt = this.refreshExpiresAt();
     const now = new Date();
@@ -337,7 +340,7 @@ export class AuthService {
   private async createSessionTokens(user: AuthUser) {
     return {
       accessToken: this.signAccess(user),
-      refreshToken: await this.issueRefresh(user.id),
+      refreshToken: await this.issueRefresh(user.id, user.sessionVersion),
     };
   }
 
@@ -347,6 +350,7 @@ export class AuthService {
         sub: user.id,
         email: user.email,
         type: 'access',
+        version: user.sessionVersion,
         roles: user.roles.map(({ role }) => role),
         phoneVerified: user.phoneVerified,
       },
@@ -357,12 +361,13 @@ export class AuthService {
     );
   }
 
-  private async issueRefresh(userId: string) {
+  private async issueRefresh(userId: string, version: number) {
     const id = randomUUID();
     const familyId = randomUUID();
     const token = this.signRefresh({
       sub: userId,
       type: 'refresh',
+      version,
       jti: id,
       familyId,
     });
@@ -460,6 +465,7 @@ export class AuthService {
       name: user.name,
       avatarUrl: user.avatarUrl,
       emailVerified: user.emailVerified,
+      hasPassword: Boolean(user.passwordHash),
       locale: user.locale,
       phone: user.phone,
       phoneVerified: user.phoneVerified,

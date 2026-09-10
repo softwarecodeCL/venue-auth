@@ -1,3 +1,5 @@
+import { PasswordService } from './password.service';
+import { PasswordMailer } from './password-mailer';
 import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
@@ -23,6 +25,8 @@ import {
   controllers: [AuthController],
   providers: [
     AuthService,
+    PasswordService,
+    PasswordMailer,
     JwtStrategy,
     GoogleStrategy,
     GoogleOAuthStartGuard,

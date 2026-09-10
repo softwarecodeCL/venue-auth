@@ -11,6 +11,8 @@ import {
 import type { Request, Response } from 'express';
 import { UserService } from '../user/user.service';
 import { UpdateMeDto } from '../user/dto/update-me.dto';
+import { PasswordService } from './password.service';
+import { ForgotPasswordDto, ResetPasswordDto, ChangePasswordDto } from './dto/password.dto';
 import { authCookieOptions } from './auth-cookies';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -38,7 +40,27 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly userService: UserService,
+    private readonly passwords: PasswordService,
   ) {}
+
+  @Post('password/forgot')
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    return this.passwords.request(dto.email, dto.locale || 'es', req.ip || req.socket.remoteAddress || 'unknown');
+  }
+
+  @Post('password/reset')
+  resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request) {
+    return this.passwords.reset(dto.token, dto.password, req.ip || req.socket.remoteAddress || 'unknown');
+  }
+
+  @Post('password/change')
+  @UseGuards(JwtAuthGuard)
+  async changePassword(@Body() dto: ChangePasswordDto, @Req() req: AuthenticatedRequest, @Res({ passthrough: true }) res: Response) {
+    const result = await this.passwords.change(req.user.id, dto.currentPassword, dto.password);
+    res.clearCookie('access_token', authCookieOptions());
+    res.clearCookie('refresh_token', authCookieOptions());
+    return result;
+  }
 
   @Post('register')
   register(@Body() dto: RegisterDto) {

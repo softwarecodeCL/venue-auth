@@ -3,6 +3,7 @@ import { authCookieOptions, oauthStateCookieOptions } from '../auth/auth-cookies
 
 describe('Auth production configuration', () => {
   const input = {
+    PASSWORD_MAIL_PROVIDER: 'smtp', SMTP_HOST: 'smtp.example.com', SMTP_PORT: '587', SMTP_USER: 'test', SMTP_PASSWORD: 'test', MAIL_FROM: 'Apartha <test@example.com>',
     NODE_ENV: 'production', PORT: '3010', DATABASE_URL: 'postgresql://test:test@localhost/test',
     FRONTEND_URL: 'https://www.apartha.com', CORS_ORIGINS: 'https://www.apartha.com',
     CALLBACK_GOOGLE: 'https://auth.apartha.com/auth/google/callback',

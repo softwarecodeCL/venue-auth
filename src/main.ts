@@ -15,6 +15,9 @@ const environment = validateAuthEnvironment(process.env);
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  if (environment.AUTH_TRUST_PROXY) {
+    app.getHttpAdapter().getInstance().set('trust proxy', environment.AUTH_TRUST_PROXY);
+  }
 
   app.use(helmet());
   app.use(cookieParser());

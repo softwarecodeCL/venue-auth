@@ -41,6 +41,13 @@ const authEnvironmentSchema = z
       .enum(['lax', 'strict', 'none'])
       .default('lax'),
 
+    PASSWORD_MAIL_PROVIDER: z.enum(['console', 'smtp']).default('console'),
+    AUTH_TRUST_PROXY: optionalText,
+    SMTP_HOST: optionalText,
+    SMTP_PORT: z.coerce.number().int().refine(v => v === 465 || v === 587).default(587),
+    SMTP_USER: optionalText,
+    SMTP_PASSWORD: optionalText,
+    MAIL_FROM: optionalText,
     SMS_PROVIDER: z.enum(['console', 'aws']),
     PHONE_DEFAULT_COUNTRY: z.string().regex(/^[A-Z]{2}$/),
     PHONE_ALLOWED_COUNTRIES: z.string().min(2),
@@ -131,6 +138,9 @@ export function validateAuthEnvironment(
 
   const env = parsed.data;
   const errors: string[] = [];
+  if (env.NODE_ENV === 'production' && env.PASSWORD_MAIL_PROVIDER !== 'smtp') errors.push('Producción requiere PASSWORD_MAIL_PROVIDER=smtp');
+  if (env.PASSWORD_MAIL_PROVIDER === 'smtp' && (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD || !env.MAIL_FROM)) errors.push('Configura SMTP_HOST, SMTP_USER, SMTP_PASSWORD y MAIL_FROM');
+
   const origins = parseBrowserOrigins(env.CORS_ORIGINS, env.NODE_ENV === 'production');
   if (!origins.includes(new URL(env.FRONTEND_URL).origin)) errors.push('CORS_ORIGINS debe incluir FRONTEND_URL');
   if (env.NODE_ENV === 'production') {
