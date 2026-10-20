@@ -43,6 +43,7 @@ async function bootstrap() {
   app.enableCors({
     origin: origins,
     credentials: true,
+    exposedHeaders: ['Retry-After'],
   });
 
   await app.listen(environment.PORT);

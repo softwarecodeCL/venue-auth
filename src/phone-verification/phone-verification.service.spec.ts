@@ -88,6 +88,22 @@ describe('PhoneVerificationService', () => {
     expect(created.codeHash).not.toBe(sms.code);
   });
 
+  it('does not skip SMS merely because the editable User row claims verification', async () => {
+    allowCodeRequest();
+    prisma.user.findUnique.mockResolvedValue({ id: 'user-1', phone: '+56912345678', phoneVerified: true });
+    const result = await service.sendCode('user-1', { phone: '+56912345678' });
+    expect(result.verified).toBe(false);
+    expect(sender.sendVerificationCode).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks phone ownership even when the User row already claims verification', async () => {
+    allowCodeRequest();
+    prisma.user.findUnique.mockResolvedValue({ id: 'user-1', phone: '+56912345678', phoneVerified: true });
+    prisma.phoneIdentity.findUnique.mockResolvedValue({ userId: 'other-user' });
+    await expect(service.sendCode('user-1', { phone: '+56912345678' })).rejects.toThrow(ConflictException);
+    expect(sender.sendVerificationCode).not.toHaveBeenCalled();
+  });
+
   it('does not send another code during the cooldown', async () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 'user-1',

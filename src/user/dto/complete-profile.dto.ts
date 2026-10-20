@@ -1,5 +1,5 @@
 import { Role } from '@prisma/client';
-import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+import { Equals, IsIn, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
 
 export class CompleteProfileDto {
   @IsString()
@@ -9,4 +9,8 @@ export class CompleteProfileDto {
 
   @IsIn([Role.GUEST, Role.HOST])
   mode: Role;
+
+  @ValidateIf(dto => dto.mode === Role.HOST || dto.hostDeclarationAccepted !== undefined)
+  @Equals(true)
+  hostDeclarationAccepted?: boolean;
 }

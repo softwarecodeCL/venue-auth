@@ -31,6 +31,7 @@ describe('AuthService', () => {
     process.env.JWT_REFRESH_EXPIRES_IN = '30d';
 
     prisma = {
+      $executeRaw: jest.fn(),
       user: {
         findUnique: jest.fn(),
         create: jest.fn(),
@@ -64,13 +65,28 @@ describe('AuthService', () => {
     await expect(service.getAuthenticatedUser('user-1', 1)).resolves.toMatchObject({ id: 'user-1' });
   });
 
+  it.each([null, { phoneE164: '+56987654321' }])('requires SMS again when the phone flag lacks matching proof: %j', async identity => {
+    prisma.user.findUnique.mockResolvedValue(userRecord({ profileCompletedAt: new Date(), phone: '+56912345678', phoneVerified: true, PhoneIdentity: identity }));
+    const result = await service.getAuthenticatedUser('user-1', 0);
+    expect(result.phoneVerified).toBe(false);
+    expect(result.onboarding.nextStep).toBe('PHONE_VERIFICATION');
+    expect(result).not.toHaveProperty('PhoneIdentity');
+  });
+
+  it('keeps a consistently verified phone usable', async () => {
+    prisma.user.findUnique.mockResolvedValue(userRecord({ profileCompletedAt: new Date(), phone: '+56912345678', phoneVerified: true, PhoneIdentity: { phoneE164: '+56912345678' } }));
+    const result = await service.getAuthenticatedUser('user-1', 0);
+    expect(result.phoneVerified).toBe(true);
+    expect(result.onboarding.nextStep).toBe('COMPLETE');
+  });
+
   it('creates every local account with the GUEST role', async () => {
     prisma.user.findUnique.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue(userRecord());
 
     const result = await service.register({
       email: ' USER@Example.com ',
-      password: 'secret123',
+      password: 'long passphrase!',
       name: 'Marco',
     });
 
@@ -86,30 +102,14 @@ describe('AuthService', () => {
     expect(result.onboarding.nextStep).toBe('PROFILE');
   });
 
-  it('links Google to an existing verified email instead of creating a duplicate user', async () => {
+  it('requires explicit linking even when a matching local email is verified', async () => {
     prisma.authProvider.findUnique.mockResolvedValue(null);
-    prisma.user.findUnique.mockResolvedValue({ id: 'user-1' });
-    prisma.authProvider.create.mockResolvedValue({ id: 'provider-1' });
-    prisma.user.update.mockResolvedValue(userRecord());
-    prisma.refreshSession.create.mockResolvedValue({ id: 'session-1' });
-
-    const result = await service.loginWithOAuth({
-      provider: 'google',
-      providerUserId: 'google-subject-1',
-      email: 'USER@example.com',
-      emailVerified: true,
-      name: 'Marco',
-    });
-
-    expect(prisma.authProvider.create).toHaveBeenCalledWith({
-      data: {
-        provider: 'google',
-        providerUserId: 'google-subject-1',
-        userId: 'user-1',
-      },
-    });
+    prisma.user.findUnique.mockResolvedValue(userRecord());
+    await expect(service.loginWithOAuth({ provider: 'google', providerUserId: 'google-subject-1',
+      email: 'USER@example.com', emailVerified: true, name: 'Marco' }))
+      .rejects.toMatchObject({ response: { code: 'GOOGLE_LINK_REQUIRED' } });
+    expect(prisma.authProvider.create).not.toHaveBeenCalled();
     expect(prisma.user.create).not.toHaveBeenCalled();
-    expect(result.user.roles).toEqual([Role.GUEST]);
   });
 
   it('rejects a Google identity whose email was not verified', async () => {

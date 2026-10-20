@@ -1,3 +1,8 @@
+> **Apartha — Base de datos:** las migraciones se administran exclusivamente desde
+> Web API; consultar `api-web/web-api/docs/DATABASE_MIGRATIONS.md`.
+> Aquí ejecutar `pnpm run db:generate`. `prisma/migrations-archive` conserva SQL
+> histórico para consulta, no para ejecución.
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>

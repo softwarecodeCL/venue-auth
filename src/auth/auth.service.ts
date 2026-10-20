@@ -1,19 +1,28 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   UnauthorizedException,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, Role, UserStatus } from '@prisma/client';
 import { compare, hash } from 'bcrypt';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { queueAccountEmail } from './account-email';
+import { assertNewPassword } from './password-policy';
+import { GoogleLinkIntent, signGoogleLink } from './google-link';
+import { hasVerifiedPhone } from '../user/verified-phone';
+
+const dummyPasswordHash = hash(randomBytes(32).toString('hex'), 12);
 
 const authUserSelect = {
   sessionVersion: true,
   passwordHash: true,
+  passwordVerifiedAt: true,
   id: true,
   email: true,
   name: true,
@@ -23,15 +32,18 @@ const authUserSelect = {
   phone: true,
   phoneVerified: true,
   phoneVerifiedAt: true,
+  PhoneIdentity: { select: { phoneE164: true } },
   status: true,
   deletedAt: true,
   profileCompletedAt: true,
   roles: { select: { role: true } },
+  authProviders: { select: { provider: true } },
 } satisfies Prisma.UserSelect;
 
 const loginUserSelect = {
   ...authUserSelect,
   passwordHash: true,
+  passwordVerifiedAt: true,
 } satisfies Prisma.UserSelect;
 
 type AuthUser = Prisma.UserGetPayload<{ select: typeof authUserSelect }>;
@@ -73,28 +85,40 @@ function parseDurationMs(
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
   ) {}
 
   async register(dto: RegisterDto) {
+    if (dto.password !== undefined) assertNewPassword(dto.password);
     const email = normalizeEmail(dto.email);
     const exists = await this.prisma.user.findUnique({ where: { email } });
-    if (exists) throw new BadRequestException('El email ya está registrado');
+    if (exists) throw new BadRequestException({ code: 'ACCOUNT_ALREADY_EXISTS' });
 
-    const passwordHash = await hash(dto.password, 12);
-    const user = await this.prisma.user.create({
+    const user = await this.prisma.$transaction(async tx => {
+    const created = await tx.user.create({
       data: {
         email,
         name: dto.name.trim(),
-        passwordHash,
+        // The email owner chooses the credential only after opening the one-use link.
+        passwordHash: null,
+        locale: dto.locale ?? 'es',
         authProviders: {
           create: { provider: 'local', providerUserId: email },
         },
         roles: { create: { role: Role.GUEST } },
       },
       select: authUserSelect,
+    });
+    // Welcome is queued after email proof, not while this account is pending.
+    return created;
+    }).catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new BadRequestException({ code: 'ACCOUNT_ALREADY_EXISTS' });
+      }
+      throw error;
     });
 
     return this.toPublicUser(user);
@@ -107,12 +131,8 @@ export class AuthService {
       select: loginUserSelect,
     });
 
-    if (!user?.passwordHash) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    const matches = await compare(dto.password, user.passwordHash);
-    if (!matches) throw new UnauthorizedException('Credenciales inválidas');
+    const matches = await compare(dto.password, user?.passwordHash || await dummyPasswordHash);
+    if (!user?.passwordHash || !matches) throw new UnauthorizedException({ code: 'INVALID_CREDENTIALS' });
 
     this.assertActive(user);
     await this.prisma.user.update({
@@ -132,7 +152,7 @@ export class AuthService {
     emailVerified?: boolean;
     provider: 'google';
     providerUserId?: string | null;
-  }) {
+  }, link?: GoogleLinkIntent) {
     if (!profile.email || !profile.providerUserId) {
       throw new UnauthorizedException('Google no entregó una identidad válida');
     }
@@ -144,7 +164,9 @@ export class AuthService {
 
     const email = normalizeEmail(profile.email);
     const providerUserId = profile.providerUserId;
-    const user = await this.prisma.$transaction(async (tx) => {
+    const user = await this.retryIdentityConflict(() => this.prisma.$transaction(async (tx) => {
+      // Serialize provider resolution, password reset and explicit linking for this email.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`identity:${email}`}))`;
       const provider = await tx.authProvider.findUnique({
         where: {
           provider_providerUserId: {
@@ -155,7 +177,22 @@ export class AuthService {
         select: { userId: true },
       });
 
-      if (provider) {
+      if (link && provider && provider.userId !== link.sub) {
+        throw new ConflictException({ code: 'GOOGLE_LINK_CONFLICT' });
+      }
+      if (provider && !link) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`password:${provider.userId}`}))`;
+        const current = await tx.user.findUnique({ where: { id: provider.userId }, select: authUserSelect });
+        if (!current) throw new UnauthorizedException();
+        if (current.status !== UserStatus.ACTIVE || current.deletedAt) throw new UnauthorizedException();
+        // Legacy auto-linked accounts may retain a password set by someone else.
+        // Google proves its provider identity; remove only that unproven credential.
+        if (current.passwordHash && !current.passwordVerifiedAt) {
+          const now = new Date();
+          await tx.user.update({ where: { id: current.id }, data: { passwordHash: null, sessionVersion: { increment: 1 } } });
+          await tx.refreshSession.updateMany({ where: { userId: current.id, revokedAt: null }, data: { revokedAt: now } });
+          await tx.passwordResetToken.updateMany({ where: { userId: current.id, usedAt: null }, data: { usedAt: now } });
+        }
         return tx.user.update({
           where: { id: provider.userId },
           data: {
@@ -177,42 +214,25 @@ export class AuthService {
         });
       }
 
-      const existing = await tx.user.findUnique({
-        where: { email },
-        select: { id: true },
-      });
-
-      if (existing) {
-        await tx.authProvider.create({
-          data: {
-            provider: profile.provider,
-            providerUserId,
-            userId: existing.id,
-          },
-        });
-
-        return tx.user.update({
-          where: { id: existing.id },
-          data: {
-            avatarUrl: profile.avatarUrl ?? undefined,
-            locale: profile.locale ?? undefined,
-            emailVerified: true,
-            lastLogin: new Date(),
-            roles: {
-              upsert: {
-                where: {
-                  userId_role: { userId: existing.id, role: Role.GUEST },
-                },
-                create: { role: Role.GUEST },
-                update: {},
-              },
-            },
-          },
-          select: authUserSelect,
-        });
+      const existing = await tx.user.findUnique({ where: { email }, select: { id: true } });
+      if (link) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`password:${link.sub}`}))`;
+        const account = await tx.user.findUnique({ where: { id: link.sub }, select: authUserSelect });
+        if (!account || account.sessionVersion !== link.version || !account.passwordVerifiedAt || !account.passwordHash || !account.emailVerified
+          || account.email !== email || existing?.id !== link.sub) {
+          throw new ConflictException({ code: 'GOOGLE_LINK_CONFLICT' });
+        }
+        this.assertActive(account);
+        // Multiple callbacks are harmless; an identity can never move between users.
+        if (!provider) {
+          await tx.authProvider.create({ data: { provider: 'google', providerUserId, userId: account.id } });
+          await queueAccountEmail(tx, account.id, 'GOOGLE_LINKED', `google-linked:${account.id}:${providerUserId}`);
+        }
+        return account;
       }
+      if (existing) throw new ConflictException({ code: 'GOOGLE_LINK_REQUIRED' });
 
-      return tx.user.create({
+      const created = await tx.user.create({
         data: {
           email,
           name: profile.name,
@@ -230,11 +250,35 @@ export class AuthService {
         },
         select: authUserSelect,
       });
-    });
+      await queueAccountEmail(tx, created.id, 'ACCOUNT_CREATED', `account-created:${created.id}`);
+      return created;
+    }));
 
     this.assertActive(user);
     const tokens = await this.createSessionTokens(user);
     return { ...tokens, user: this.toPublicUser(user) };
+  }
+
+  async googleLinkIntent(userId: string, currentPassword: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: authUserSelect });
+    if (!user?.passwordHash || !user.passwordVerifiedAt || !user.emailVerified || !await compare(currentPassword, user.passwordHash)) {
+      // A wrong confirmation password is not an expired session. Returning 401
+      // would trigger the client's refresh/retry and consume the quota twice.
+      throw new BadRequestException({ code: 'PASSWORD_CURRENT_INVALID' });
+    }
+    this.assertActive(user);
+    return signGoogleLink(this.jwtService, { sub: user.id, version: user.sessionVersion });
+  }
+
+  private async retryIdentityConflict<T>(operation: () => Promise<T>): Promise<T> {
+    // Concurrent OAuth callbacks or registration can win the unique insert.
+    // Restart the transaction and resolve the identity that was just created.
+    for (let attempt = 0; ; attempt++) {
+      try { return await operation(); }
+      catch (error) {
+        if (attempt >= 2 || !(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+      }
+    }
   }
 
   async getAuthenticatedUser(userId: string, version = 0) {
@@ -260,15 +304,11 @@ export class AuthService {
 
     if (
       !session ||
+      session.userId !== payload.sub ||
       session.tokenHash !== hash ||
       session.familyId !== payload.familyId
     ) {
       throw new UnauthorizedException('Sesión inválida');
-    }
-
-    if (session.revokedAt) {
-      await this.revokeFamily(session.familyId);
-      throw new UnauthorizedException('La sesión fue reutilizada o revocada');
     }
 
     if (session.expiresAt.getTime() <= Date.now()) {
@@ -279,18 +319,23 @@ export class AuthService {
     this.assertActive(session.user);
     if ((payload.version ?? 0) !== session.user.sessionVersion) throw new UnauthorizedException('Sesión revocada');
 
+    if (session.revokedAt) {
+      return this.recoverConcurrentRotation(session, payload);
+    }
+
     const nextId = randomUUID();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.refreshTtlMs());
     const nextToken = this.signRefresh({
       sub: session.userId,
       jti: nextId,
       familyId: session.familyId,
       type: 'refresh',
       version: session.user.sessionVersion,
-    });
-    const expiresAt = this.refreshExpiresAt();
-    const now = new Date();
+    }, now, expiresAt);
 
     const rotated = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`auth:refresh:${session.familyId}`}))`;
       const rotated = await tx.refreshSession.updateMany({
         where: { id: session.id, tokenHash: hash, revokedAt: null },
         data: { revokedAt: now, lastUsedAt: now, replacedById: nextId },
@@ -305,20 +350,60 @@ export class AuthService {
           familyId: session.familyId,
           tokenHash: tokenHash(nextToken),
           expiresAt,
+          createdAt: now,
         },
       });
       return true;
     });
 
     if (!rotated) {
-      await this.revokeFamily(session.familyId);
-      throw new UnauthorizedException('La sesión ya fue rotada');
+      const current = await this.prisma.refreshSession.findUnique({
+        where: { id: session.id },
+        include: { user: { select: authUserSelect } },
+      });
+      if (current) return this.recoverConcurrentRotation(current, payload);
+      throw new UnauthorizedException('Sesión inválida');
     }
 
     return {
       accessToken: this.signAccess(session.user),
       refreshToken: nextToken,
     };
+  }
+
+  // Parallel tabs or SSR requests may present the same cookie before either
+  // response reaches the browser. Return the SAME successor briefly; never
+  // create a second branch, revive a logged-out family, or accept old replay.
+  private async recoverConcurrentRotation(
+    session: {
+      familyId: string; userId: string; revokedAt: Date | null;
+      replacedById: string | null; user: AuthUser;
+    },
+    payload: RefreshPayload,
+  ) {
+    this.assertActive(session.user);
+    if ((payload.version ?? 0) !== session.user.sessionVersion) {
+      throw new UnauthorizedException('Sesión revocada');
+    }
+    const elapsed = session.revokedAt ? Date.now() - session.revokedAt.getTime() : Infinity;
+    if (session.replacedById && elapsed >= 0 && elapsed <= 10_000) {
+      const successor = await this.prisma.refreshSession.findUnique({
+        where: { id: session.replacedById },
+      });
+      if (successor && !successor.revokedAt &&
+          successor.familyId === session.familyId && successor.userId === session.userId &&
+          successor.expiresAt.getTime() > Date.now()) {
+        const token = this.signRefresh({
+          sub: session.userId, type: 'refresh', jti: successor.id,
+          familyId: session.familyId, version: session.user.sessionVersion,
+        }, successor.createdAt, successor.expiresAt);
+        if (tokenHash(token) === successor.tokenHash) {
+          return { accessToken: this.signAccess(session.user), refreshToken: token };
+        }
+      }
+    }
+    await this.revokeFamily(session.familyId);
+    throw new UnauthorizedException('La sesión fue reutilizada o revocada');
   }
 
   async revokeRefreshToken(token: string | undefined) {
@@ -333,7 +418,8 @@ export class AuthService {
 
       if (session) await this.revokeFamily(session.familyId);
     } catch {
-      // Logout is idempotent and must not reveal token validation details.
+      // No token, cookie, or account data belongs in logout diagnostics.
+      this.logger.warn('Logout could not revoke the refresh session; cookies will still be cleared');
     }
   }
 
@@ -356,7 +442,7 @@ export class AuthService {
       },
       {
         secret: this.accessSecret(),
-        expiresIn: process.env.JWT_EXPIRES_IN || '50m',
+        expiresIn: Math.floor(this.sessionCookieMaxAge().access / 1_000),
       },
     );
   }
@@ -364,13 +450,15 @@ export class AuthService {
   private async issueRefresh(userId: string, version: number) {
     const id = randomUUID();
     const familyId = randomUUID();
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + this.refreshTtlMs());
     const token = this.signRefresh({
       sub: userId,
       type: 'refresh',
       version,
       jti: id,
       familyId,
-    });
+    }, createdAt, expiresAt);
 
     await this.prisma.refreshSession.create({
       data: {
@@ -378,18 +466,25 @@ export class AuthService {
         userId,
         familyId,
         tokenHash: tokenHash(token),
-        expiresAt: this.refreshExpiresAt(),
+        expiresAt,
+        createdAt,
       },
     });
 
     return token;
   }
 
-  private signRefresh(payload: RefreshPayload) {
-    const ttlMs = this.refreshTtlMs();
-    return this.jwtService.sign(payload, {
+  private signRefresh(payload: RefreshPayload, createdAt: Date, expiresAt: Date) {
+    return this.jwtService.sign({
+      sub: payload.sub,
+      type: payload.type,
+      version: payload.version ?? 0,
+      jti: payload.jti,
+      familyId: payload.familyId,
+      iat: Math.floor(createdAt.getTime() / 1_000),
+      exp: Math.floor(expiresAt.getTime() / 1_000),
+    }, {
       secret: this.refreshSecret(),
-      expiresIn: Math.floor(ttlMs / 1_000),
     });
   }
 
@@ -415,14 +510,13 @@ export class AuthService {
   }
 
   private async revokeFamily(familyId: string) {
-    try {
-      await this.prisma.refreshSession.updateMany({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`auth:refresh:${familyId}`}))`;
+      await tx.refreshSession.updateMany({
         where: { familyId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
-    } catch {
-      // Ignore session cleanup errors during logout; the client should still be signed out.
-    }
+    });
   }
 
   private refreshTtlMs() {
@@ -432,8 +526,11 @@ export class AuthService {
     );
   }
 
-  private refreshExpiresAt() {
-    return new Date(Date.now() + this.refreshTtlMs());
+  sessionCookieMaxAge() {
+    return {
+      access: parseDurationMs(process.env.JWT_EXPIRES_IN, 50 * 60 * 1_000),
+      refresh: this.refreshTtlMs(),
+    };
   }
 
   private accessSecret() {
@@ -448,16 +545,20 @@ export class AuthService {
     return process.env.JWT_REFRESH_SECRET;
   }
 
-  private assertActive(user: { status: UserStatus; deletedAt: Date | null }) {
+  private assertActive(user: { status: UserStatus; deletedAt: Date | null; passwordHash?: string | null; passwordVerifiedAt?: Date | null; emailVerified?: boolean }) {
     if (user.status !== UserStatus.ACTIVE || user.deletedAt) {
       throw new UnauthorizedException('La cuenta no está activa');
+    }
+    if (user.emailVerified === false || (user.passwordHash && !user.passwordVerifiedAt)) {
+      throw new UnauthorizedException({ code: 'EMAIL_VERIFICATION_REQUIRED' });
     }
   }
 
   private toPublicUser(user: AuthUser) {
     const roles = user.roles.map(({ role }) => role);
     const profileCompleted = Boolean(user.profileCompletedAt);
-    const onboardingCompleted = profileCompleted && user.phoneVerified;
+    const phoneVerified = hasVerifiedPhone(user);
+    const onboardingCompleted = profileCompleted && phoneVerified;
 
     return {
       id: user.id,
@@ -465,20 +566,21 @@ export class AuthService {
       name: user.name,
       avatarUrl: user.avatarUrl,
       emailVerified: user.emailVerified,
-      hasPassword: Boolean(user.passwordHash),
+      hasPassword: Boolean(user.passwordHash && user.passwordVerifiedAt),
+      googleLinked: Boolean(user.authProviders?.some(item => item.provider === 'google')),
       locale: user.locale,
       phone: user.phone,
-      phoneVerified: user.phoneVerified,
-      phoneVerifiedAt: user.phoneVerifiedAt,
+      phoneVerified,
+      phoneVerifiedAt: phoneVerified ? user.phoneVerifiedAt : null,
       status: user.status,
       roles,
       onboarding: {
         profileCompleted,
-        phoneVerified: user.phoneVerified,
+        phoneVerified,
         completed: onboardingCompleted,
         nextStep: !profileCompleted
           ? 'PROFILE'
-          : !user.phoneVerified
+          : !phoneVerified
             ? 'PHONE_VERIFICATION'
             : 'COMPLETE',
       },

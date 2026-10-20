@@ -20,6 +20,8 @@ export function parseBrowserOrigins(value: string, production: boolean): string[
 export function browserMutationGuard(origins: string[]) {
   const allowed = new Set(origins);
   return (req: Request, res: Response, next: NextFunction) => {
+    // Auth/profile responses and single-use OAuth redirects must never be cached.
+    res.setHeader('Cache-Control', 'private, no-store');
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     const origin = req.headers.origin;
     const hasSessionCookie = /(?:^|;\s*)(?:access_token|refresh_token)=/.test(req.headers.cookie ?? '');

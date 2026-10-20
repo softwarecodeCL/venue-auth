@@ -1,5 +1,11 @@
 # Despliegue del bloque de identidad
 
+> Documento histórico. Para el despliegue actual usar
+> `api-web/web-api/docs/DATABASE_MIGRATIONS.md` y `LOGIN_SECURITY.md`.
+> El login actual exige verificar correo antes de activar la contraseña, Google
+> no vincula cuentas por coincidencia de correo y SMS ya está implementado.
+> Web API sigue siendo el único ejecutor de migraciones.
+
 Este cambio introduce perfiles huésped/anfitrión, onboarding obligatorio para
 cuentas nuevas, vinculación segura con Google y sesiones de renovación
 revocables.
@@ -19,7 +25,7 @@ revocables.
 ## Orden de despliegue
 
 1. Poner temporalmente la escritura de identidad en mantenimiento.
-2. Ejecutar `pnpm exec prisma migrate deploy` únicamente desde `webapi`, que es
+2. Ejecutar `pnpm run db:check` y, tras revisar los pendientes, `pnpm run db:deploy` únicamente desde `webapi`, que es
    el propietario del historial de migraciones. Auth comparte el esquema, pero
    nunca debe ejecutar migraciones.
 3. Desplegar `auth`, `webapi` y `front` como una sola versión coordinada.

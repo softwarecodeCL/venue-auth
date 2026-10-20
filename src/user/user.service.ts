@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { UpdateMeDto } from 'src/user/dto/update-me.dto';
+import { UpdateMeDto } from './dto/update-me.dto';
 import { CompleteProfileDto } from './dto/complete-profile.dto';
+import { queueAccountEmail } from '../auth/account-email';
+import { withVerifiedPhone } from './verified-phone';
 
 const toSet = (v: string | null | undefined): string | null | undefined => {
   if (v === undefined) return undefined; // no tocar
@@ -26,6 +28,7 @@ const userSelect = {
   locale: true,
   phone: true,
   phoneVerified: true,
+  PhoneIdentity: { select: { phoneE164: true } },
   aboutMe: true,
   profileCompletedAt: true,
   roles: { select: { role: true } },
@@ -64,7 +67,7 @@ export class UserService {
       select: userSelect,
     });
     if (!user) throw new NotFoundException('User not found');
-    return user;
+    return withVerifiedPhone(user);
   }
 
   async updateMe(userId: string, dto: UpdateMeDto) {
@@ -101,13 +104,13 @@ export class UserService {
                 longitude: dto.contactInfo.longitude ?? null,
               },
               update: {
-                address1: trimOrNull(dto.contactInfo.address1),
-                city: trimOrNull(dto.contactInfo.city),
-                state: trimOrNull(dto.contactInfo.state),
-                country: trimOrNull(dto.contactInfo.country),
-                zipCode: trimOrNull(dto.contactInfo.zipCode),
-                latitude: dto.contactInfo.latitude ?? null,
-                longitude: dto.contactInfo.longitude ?? null,
+                address1: toSet(dto.contactInfo.address1),
+                city: toSet(dto.contactInfo.city),
+                state: toSet(dto.contactInfo.state),
+                country: toSet(dto.contactInfo.country),
+                zipCode: toSet(dto.contactInfo.zipCode),
+                latitude: dto.contactInfo.latitude,
+                longitude: dto.contactInfo.longitude,
               },
             },
           };
@@ -132,14 +135,14 @@ export class UserService {
                 websiteUrl: trimOrNull(dto.socialAccounts.websiteUrl),
               },
               update: {
-                facebook: trimOrNull(dto.socialAccounts.facebook),
-                twitter: trimOrNull(dto.socialAccounts.twitter),
-                linkedIn: trimOrNull(dto.socialAccounts.linkedIn),
-                dribbble: trimOrNull(dto.socialAccounts.dribbble),
-                pinterest: trimOrNull(dto.socialAccounts.pinterest),
-                vimeoUrl: trimOrNull(dto.socialAccounts.vimeoUrl),
-                youtubeUrl: trimOrNull(dto.socialAccounts.youtubeUrl),
-                websiteUrl: trimOrNull(dto.socialAccounts.websiteUrl),
+                facebook: toSet(dto.socialAccounts.facebook),
+                twitter: toSet(dto.socialAccounts.twitter),
+                linkedIn: toSet(dto.socialAccounts.linkedIn),
+                dribbble: toSet(dto.socialAccounts.dribbble),
+                pinterest: toSet(dto.socialAccounts.pinterest),
+                vimeoUrl: toSet(dto.socialAccounts.vimeoUrl),
+                youtubeUrl: toSet(dto.socialAccounts.youtubeUrl),
+                websiteUrl: toSet(dto.socialAccounts.websiteUrl),
               },
             },
           };
@@ -151,15 +154,22 @@ export class UserService {
         data: { ...userPatch, ...relationPatch },
       });
 
-      return tx.user.findUnique({
+      const updated = await tx.user.findUnique({
         where: { id: userId },
         select: userSelect, // tu select actual
       });
+      return updated ? withVerifiedPhone(updated) : null;
     });
   }
 
   async completeProfile(userId: string, dto: CompleteProfileDto) {
     const name = dto.name.trim();
+    if (name.length < 2 || name.length > 80) {
+      throw new BadRequestException('El nombre debe tener entre 2 y 80 caracteres');
+    }
+    if (dto.mode === Role.HOST && dto.hostDeclarationAccepted !== true) {
+      throw new BadRequestException({ code: 'HOST_DECLARATION_REQUIRED' });
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
@@ -177,6 +187,13 @@ export class UserService {
       });
 
       if (dto.mode === Role.HOST) {
+        // Operational declaration, not identity or ownership verification.
+        // Preserve the first acceptance of this version on repeated requests.
+        await tx.$executeRaw`
+          INSERT INTO "public"."HostDeclaration" ("userId", "version")
+          VALUES (${userId}, ${'2026-10-17'})
+          ON CONFLICT ("userId") DO NOTHING
+        `;
         await tx.userRole.upsert({
           where: { userId_role: { userId, role: Role.HOST } },
           create: { userId, role: Role.HOST },
@@ -188,6 +205,7 @@ export class UserService {
           create: { userId },
           update: {},
         });
+        await queueAccountEmail(tx, userId, 'HOST_CREATED', `host-created:${userId}`);
       }
     });
 
@@ -206,6 +224,7 @@ export class UserService {
         emailVerified: true,
         phone: true,
         phoneVerified: true,
+        PhoneIdentity: { select: { phoneE164: true } },
         aboutMe: true,
         createdAt: true,
         updatedAt: true,
@@ -241,6 +260,6 @@ export class UserService {
     });
 
     if (!user) throw new NotFoundException('Usuario no encontrado');
-    return user;
+    return withVerifiedPhone(user);
   }
 }

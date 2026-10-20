@@ -27,11 +27,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         cookieExtractor(request) ?? bearerExtractor(request),
       ignoreExpiration: false,
       secretOrKey: process.env.JWT_SECRET,
+      algorithms: ['HS256'],
     });
   }
 
   async validate(payload: { sub: string; type?: string; version?: number }) {
-    if (!payload.sub || (payload.type && payload.type !== 'access')) {
+    if (typeof payload.sub !== 'string' || !payload.sub || payload.type !== 'access' || !Number.isInteger(payload.version)) {
       throw new UnauthorizedException('Token de acceso inválido');
     }
     return this.authService.getAuthenticatedUser(payload.sub, payload.version ?? 0);

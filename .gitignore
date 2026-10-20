@@ -37,6 +37,9 @@ lerna-debug.log*
 
 # dotenv environment variable files
 .env
+.env.*
+!.env.example
+!.env.*.example
 .env.development.local
 .env.test.local
 .env.production.local
@@ -56,3 +59,24 @@ pids
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 /generated/prisma
+
+# Local verification artifacts and private backups
+/output/
+/artifacts/
+/backups/
+.playwright-mcp/
+.pnpm-store/
+*.tsbuildinfo
+*.dump
+*.backup
+*.bak
+*.sql.gz
+
+# Local credentials and private keys
+.aws/
+.codex/
+client_secret_*.json
+*.key
+*.pem
+*.p12
+*.pfx

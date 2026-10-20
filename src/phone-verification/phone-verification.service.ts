@@ -1,3 +1,4 @@
+import { queueAccountEmail } from '../auth/account-email';
 import {
   BadRequestException,
   ConflictException,
@@ -82,10 +83,6 @@ export class PhoneVerificationService {
       });
       if (!user) throw new NotFoundException('Usuario no encontrado');
 
-      if (user.phoneVerified && user.phone === phoneE164) {
-        return { alreadyVerified: true as const };
-      }
-
       const owner = await tx.phoneIdentity.findUnique({
         where: { phoneE164 },
         select: { userId: true },
@@ -94,6 +91,10 @@ export class PhoneVerificationService {
         throw new ConflictException(
           'Este teléfono ya está asociado a otra cuenta',
         );
+      }
+
+      if (user.phoneVerified && user.phone === phoneE164 && owner?.userId === userId) {
+        return { alreadyVerified: true as const };
       }
 
       const active = await tx.phoneVerificationChallenge.findFirst({
@@ -338,6 +339,7 @@ export class PhoneVerificationService {
           },
         });
 
+        await queueAccountEmail(tx, userId, 'PHONE_VERIFIED', `phone-verified:${challenge.id}`);
         await tx.phoneVerificationChallenge.updateMany({
           where: {
             userId,

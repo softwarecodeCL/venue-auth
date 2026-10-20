@@ -49,7 +49,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       locale,
       language,
       provider: 'google',
-      providerUserId: profile?.id ?? email ?? undefined,
+      providerUserId: profile?.id,
       emailVerified,
     };
 

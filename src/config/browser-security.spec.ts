@@ -20,9 +20,10 @@ describe('Browser origin policy', () => {
     ['POST', 'https://evil.example', '', false], // Login CSRF, even without cookies.
   ])('%s from %s with cookie=%s permitted=%s', (method, origin, cookie, permitted) => {
     const next = jest.fn();
-    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), setHeader: jest.fn() };
     browserMutationGuard([frontend])({ method, headers: { origin, cookie } } as any, res as any, next);
     expect(next).toHaveBeenCalledTimes(permitted ? 1 : 0);
+    expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store');
     if (!permitted) expect(res.status).toHaveBeenCalledWith(403);
   });
 });
