@@ -14,7 +14,7 @@
 - `.github/security/semgrep.yml`: política local versionada, 16 reglas; no se descarga un pack variable del Registry.
 - `.github/security/run_semgrep.py`: ejecuta CE, publica solo ID, severidad, ruta, línea y conteos. Nunca imprime coincidencias, código fuente ni valores. No escribe informes, no ejecuta la aplicación ni sus imports y no transmite código a un servicio de análisis.
 - `.semgrepignore`: sustituye las exclusiones predeterminadas. Solo dependencias, compilados, caches, artefactos generados y metadatos internos Git. Pruebas, fixtures, documentación y scripts permanecen dentro del alcance. Los backends excluyen explícitamente el cliente generado `generated/prisma/`, incluyendo copias locales antiguas.
-- `.github/security/gitleaks.toml`: reglas integradas de Gitleaks, sin allowlists del proyecto ni baseline.
+- `.github/security/gitleaks.toml`: reglas integradas de Gitleaks. Excepciones revisadas de valores ficticios con condición AND entre regla, ruta y valor exacto; sin baseline.
 
 Herramientas fijadas: Semgrep **1.182.0**, Gitleaks **8.30.1**. Actions checkout **v7.0.1** y setup-python **v7.0.0**, ambas por SHA completo. Python3.12 es solo para el escáner; no se instala ni ejecuta Node ni dependencias de la aplicación.
 
@@ -49,9 +49,9 @@ Validados con CLI reales en Windows, sin dependencias de la aplicación: YAML, c
 
 Semgrep: 0 coincidencias con esta política. Gitleaks: 1 coincidencia histórica genérica en README.md. Ausencia de hallazgos no acredita seguridad integral.
 
-Los conteos de secretos son coincidencias, no credenciales únicas confirmadas ni prueba de uso indebido. No se muestran valores. No se han corregido vulnerabilidades, rotado claves, reescrito historial ni añadido excepciones para que los checks pasen. La política puede bloquear el primer PR por hallazgos preexistentes; hay que clasificarlos y resolverlos en una tarea posterior.
+Los conteos de secretos son coincidencias, no credenciales únicas confirmadas ni prueba de uso indebido. No se muestran valores. No se han rotado claves ni reescrito el historial. Solo se aceptan las excepciones de valores ficticios documentadas en esta revisión. La política conserva bloqueados los hallazgos reales pendientes. Ver la revisión del 21-10-2026 al final de este documento.
 
-Pendiente en GitHub: primera ejecución Ubuntu y del instalador Linux; ejecución real de Dependabot y evaluación de planes/permisos para protección de `main`. La validación local no equivale a un check remoto aprobado. Los jobs no se han lanzado mediante push ni workflow_dispatch.
+Comprobadas las primeras 18 ejecuciones de GitHub (6 por repositorio): instaladores Linux y escáneres funcionaron. Los bloqueos correspondían a los hallazgos descritos. La corrección de política se valida de nuevo localmente y al publicarla; la protección de ramas depende de los Settings del propietario.
 
 Para repetir en una instalación aislada con las versiones indicadas, desde esta raíz:
 
@@ -65,7 +65,7 @@ No usar `npm audit fix`, migraciones, `npm install` ni regenerar locks para conf
 
 ## Activación por un administrador en GitHub
 
-1. Subir estos archivos mediante un PR y revisarlos. No se hizo commit/push desde este workspace. Dependabot, cron y ejecución manual requieren que la configuración esté en la rama principal `main`.
+1. La configuración ya fue publicada en `main` con autorización del propietario; revisar los resultados en Actions. Dependabot, cron y ejecución manual requieren que la configuración esté en la rama principal `main`.
 2. En **Settings → Advanced Security / Code security** (nombre según interfaz), habilitar **Dependency graph**, **Dependabot alerts** y **Dependabot security updates**. La configuración YAML de actualizaciones de versión no activa por sí sola esos dos interruptores. Comprobar **Security → Dependabot** y los registros del actualizador después de integrar.
 3. Permitir Actions y las Actions oficiales fijadas según las políticas de la organización. No hacen falta secretos, permiso de escritura de seguridad ni GitHub Code Security/SARIF.
 4. Una vez que los checks hayan aparecido en un PR, en **Settings → Rules → Rulesets** crear/editar la regla para `main`, activarla y exigir PR más los checks **Semgrep CE** y **Gitleaks history**, con GitHub Actions como fuente. Alternativamente usar una regla de protección de rama. Exigir rama actualizada si se desea. No crear excepciones para saltar hallazgos.
@@ -83,3 +83,9 @@ ZAP queda para una segunda etapa: requiere ambiente de pruebas, URLs autorizadas
 - https://docs.semgrep.dev/cli-reference
 - https://pypi.org/project/semgrep/1.182.0/
 - https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+
+## Revisión de falsos positivos — 21-10-2026
+
+El valor del badge histórico de README coincide exactamente con el ejemplo público de [nestjs/typescript-starter](https://github.com/nestjs/typescript-starter/blob/master/README.md). Se quitó el parámetro innecesario del README actual. La excepción solo acepta ese valor exacto en `README.md` para `generic-api-key`; otra clave en el mismo archivo sigue bloqueándose.
+
+Escaneo local del historial completo: 0 hallazgos tras la revisión. Probes sintéticos comprobaron tanto los ejemplos aceptados como valores/rutas distintos que deben bloquear. Las coincidencias originales permanecen descritas arriba como antecedente de la primera ejecución.

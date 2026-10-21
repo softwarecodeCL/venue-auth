@@ -1,4 +1,14 @@
-title = "Apartha: bundled Gitleaks rules, no project allowlists or baseline"
+title = "Apartha: bundled Gitleaks rules with a reviewed placeholder exception"
 
 [extend]
 useDefault = true
+
+# Public placeholder copied verbatim from nestjs/typescript-starter README.
+# Both the root README path AND the exact placeholder value must match.
+[[allowlists]]
+description = "Reviewed NestJS starter badge placeholder; not an Apartha credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^README\.md$''']
+regexTarget = "secret"
+regexes = ['''^abc123def456$''']
