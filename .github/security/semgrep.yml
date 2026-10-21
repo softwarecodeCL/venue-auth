@@ -1,0 +1,163 @@
+# Repository-owned CE policy, v1. Rules are reviewed in Git like application code.
+# ERROR rules block CI. WARNING rules request review and do not block by themselves.
+# JS rules also parse TypeScript. Nuxt scripts are extracted without executing them.
+rules:
+- id: apartha.dynamic-eval
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Dynamic code evaluation requires removal or an explicit security
+    review.
+  patterns:
+  - pattern-either:
+    - pattern: eval($CODE)
+    - pattern: new Function(...)
+    - pattern: Function(...)
+  - pattern-not: eval("...")
+
+- id: apartha.tls-validation-disabled
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: TLS certificate verification is explicitly disabled.
+  pattern-either:
+  - pattern: "{..., rejectUnauthorized: false, ...}"
+  - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+
+- id: apartha.jwt-none-algorithm
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: An unsigned JWT algorithm is explicitly enabled.
+  pattern-either:
+  - pattern: "{..., algorithms: [..., 'none', ...], ...}"
+  - pattern: "{..., algorithm: 'none', ...}"
+
+- id: apartha.jwt-signature-disabled
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: JWT signature validation is explicitly disabled.
+  pattern-either:
+  - pattern: "{..., ignoreSignature: true, ...}"
+  - pattern: "{..., verify_signature: false, ...}"
+
+- id: apartha.request-command-injection
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Request-controlled data reaches a shell command in this function.
+  mode: taint
+  pattern-sources:
+  - pattern-either:
+    - pattern: $REQ.query
+    - pattern: $REQ.body
+    - pattern: $REQ.params
+    - pattern: $REQ.headers
+  pattern-sinks:
+  - pattern-either:
+    - pattern: exec($CMD, ...)
+    - pattern: execSync($CMD, ...)
+    - pattern: $CHILD.exec($CMD, ...)
+    - pattern: $CHILD.execSync($CMD, ...)
+
+- id: apartha.request-sql-injection
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Request-controlled data reaches an unsafe Prisma SQL operation.
+  mode: taint
+  pattern-sources:
+  - pattern-either:
+    - pattern: $REQ.query
+    - pattern: $REQ.body
+    - pattern: $REQ.params
+  pattern-sinks:
+  - pattern-either:
+    - pattern: $DB.$queryRawUnsafe($SQL, ...)
+    - pattern: $DB.$executeRawUnsafe($SQL, ...)
+
+- id: apartha.literal-dynamic-code-timer
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: A timer evaluates a string as code; use a function instead.
+  pattern-either:
+  - pattern: setTimeout("...", ...)
+  - pattern: setInterval("...", ...)
+
+- id: apartha.unsafe-yaml-load
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Unsafe YAML loading may construct executable objects.
+  pattern: $YAML.unsafeLoad(...)
+
+- id: apartha.cookie-without-httponly
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Review this explicitly JavaScript-readable cookie, particularly for
+    sessions.
+  pattern: "{..., httpOnly: false, ...}"
+
+- id: apartha.jwt-decode-review
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Decoding does not validate a JWT. Confirm that verification precedes
+    authorization.
+  pattern-either:
+  - pattern: jwt.decode(...)
+  - pattern: jwtService.decode(...)
+  - pattern: this.jwtService.decode(...)
+
+- id: apartha.unsafe-prisma-review
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Review SQL construction and parameter binding around this unsafe
+    Prisma API.
+  pattern-either:
+  - pattern: $DB.$queryRawUnsafe(...)
+  - pattern: $DB.$executeRawUnsafe(...)
+
+- id: apartha.dom-html-review
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Review HTML sanitization and the origin of content passed to this DOM
+    sink.
+  pattern-either:
+  - pattern: $EL.innerHTML = $HTML
+  - pattern: $EL.outerHTML = $HTML
+  - pattern: $EL.insertAdjacentHTML($WHERE, $HTML)
+  - pattern: document.write(...)
+
+- id: apartha.node-shell-review
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Review quoting, trust boundaries and the need for shell execution.
+  pattern-either:
+  - pattern: "{..., shell: true, ...}"
+  - pattern: "{..., shell: '/bin/sh', ...}"
+
+- id: apartha.weak-hash-review
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: MD5 and SHA1 must not protect passwords, signatures or
+    security-sensitive integrity.
+  pattern-either:
+  - pattern: $CRYPTO.createHash("md5", ...)
+  - pattern: $CRYPTO.createHash("sha1", ...)
+
+- id: apartha.nest-public-route-review
+  languages:
+  - generic
+  severity: WARNING
+  message: 'Public NestJS route: review authentication intent, returned fields and
+    rate limits.'
+  paths:
+    include:
+    - '*.ts'
+    - '**/*.ts'
+  pattern-regex: '@Public\s*\('
+- id: apartha.nest-throttle-bypass-review
+  languages:
+  - generic
+  severity: WARNING
+  message: Review justification and upstream protection for bypassing rate
+    limits.
+  paths:
+    include:
+    - '*.ts'
+    - '**/*.ts'
+  pattern-regex: '@SkipThrottle\s*\('

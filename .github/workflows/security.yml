@@ -1,0 +1,87 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 13 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep CE
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SEMGREP_SEND_METRICS: 'off'
+      SEMGREP_ENABLE_VERSION_CHECK: '0'
+      SEMGREP_APP_TOKEN: ''
+    steps:
+      - name: Checkout source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up scanner Python (application Node is not needed)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install Semgrep CE 1.182.0 from its verified official wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel='semgrep-1.182.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl'
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' --tlsv1.2 \
+            "https://files.pythonhosted.org/packages/62/85/2e4bd385c4cd55d3ec293a328ffb98115277fb08b8b98be5848ec035e9fd/$wheel" \
+            --output "$RUNNER_TEMP/$wheel"
+          printf '%s  %s\n' '19a82868830389c039bb71bfc0aeebb28385e5b65740120710eff050324ad14f' "$RUNNER_TEMP/$wheel" | sha256sum --check --strict
+          python -m pip install --disable-pip-version-check --only-binary=:all: "$RUNNER_TEMP/$wheel"
+      - name: Validate the repository-owned blocking policy
+        run: semgrep scan --validate --oss-only --metrics=off --disable-version-check --config .github/security/semgrep.yml
+      - name: Scan code and enforce ERROR rules (sanitized output only)
+        run: python .github/security/run_semgrep.py
+
+  gitleaks:
+    name: Gitleaks history
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout complete history without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the free Gitleaks CLI 8.30.1 (official checksums)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="$RUNNER_TEMP/gitleaks-8.30.1"
+          mkdir -p "$tool_dir"
+          cd "$tool_dir"
+          base='https://github.com/gitleaks/gitleaks/releases/download/v8.30.1'
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' --tlsv1.2 \
+            "$base/gitleaks_8.30.1_checksums.txt" --output checksums.txt
+          printf '%s  %s\n' '061476c21adaf5441516f96f185c1a4706a83cd6329b9b38762271b3d4a52fae' checksums.txt | sha256sum --check --strict
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' --tlsv1.2 \
+            "$base/gitleaks_8.30.1_linux_x64.tar.gz" --output gitleaks_8.30.1_linux_x64.tar.gz
+          grep -E '^[a-f0-9]{64}  gitleaks_8[.]30[.]1_linux_x64[.]tar[.]gz$' checksums.txt | sha256sum --check --strict
+          tar --extract --gzip --file gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          ./gitleaks version
+      - name: Scan all fetched Git history with full redaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Do not accept per-finding ignores or inline allow-comments.
+          : > "$RUNNER_TEMP/empty.gitleaksignore"
+          "$RUNNER_TEMP/gitleaks-8.30.1/gitleaks" git \
+            --config .github/security/gitleaks.toml \
+            --gitleaks-ignore-path "$RUNNER_TEMP/empty.gitleaksignore" \
+            --ignore-gitleaks-allow --log-opts='--all' \
+            --redact=100 --no-color --no-banner --exit-code=1 .

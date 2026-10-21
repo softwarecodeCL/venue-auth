@@ -1,0 +1,4 @@
+title = "Apartha: bundled Gitleaks rules, no project allowlists or baseline"
+
+[extend]
+useDefault = true

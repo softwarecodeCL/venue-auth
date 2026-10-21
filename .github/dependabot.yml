@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # npm is the Dependabot ecosystem for both npm and pnpm lockfiles.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: America/Santiago
+    open-pull-requests-limit: 5
+    groups:
+      dependencies-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+    # Major updates remain separate, ungrouped PRs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:30'
+      timezone: America/Santiago
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]

@@ -1,0 +1,17 @@
+# Override Semgrep's default ignores: tests, fixtures, docs and scripts stay in scope.
+# Only dependency trees, generated output, caches and Git's internal database.
+**/node_modules/
+**/.git/
+**/.nuxt/
+**/.nuxt-*/
+**/.output/
+**/dist/
+**/coverage/
+**/.cache/
+**/.pnpm-store/
+**/output/
+**/artifacts/
+**/*.tsbuildinfo
+
+# Prisma generator output declared in prisma/schema.prisma.
+/generated/prisma/
